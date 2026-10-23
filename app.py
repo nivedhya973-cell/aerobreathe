@@ -54,7 +54,8 @@ def load_stories():
                 "date": "2026-10-20",
                 "content": "The hardest part of living here isn't adjusting to the culture—it's the distance when loved ones get sick. Knowing my grandparents are ill overseas while I try to focus on daily life feels like carrying two separate worlds at once. I started this project so none of us have to carry that weight in silence.",
                 "relates": 12,
-                "hugs": 8
+                "hugs": 8,
+                "passcode": "1234"
             },
             {
                 "id": 2,
@@ -64,7 +65,8 @@ def load_stories():
                 "date": "2026-10-18",
                 "content": "When I visit my home country, people see me as American. But here, people see me as an immigrant. It took years to realize that feeling 'caught in between' isn't a weakness—it's a unique perspective that connects us with millions of others.",
                 "relates": 19,
-                "hugs": 15
+                "hugs": 15,
+                "passcode": "1234"
             }
         ]
         with open(DATA_FILE, "w") as f:
@@ -152,8 +154,8 @@ elif page == "Read Stories":
             st.caption(f"**Theme:** {story.get('topic')} | **Shared by:** {story.get('author')} | **Date:** {story.get('date')}")
             st.write(story.get("content", ""))
             
-            # Interactive Reaction Buttons
-            col_r1, col_r2, col_space = st.columns([1, 1, 4])
+            # Interactive Reactions & Passcode Deletion
+            col_r1, col_r2, col_space = st.columns([1.5, 1.5, 3])
             with col_r1:
                 if st.button(f"🤝 I Relate ({story.get('relates', 0)})", key=f"relate_{story.get('id', idx)}"):
                     story["relates"] = story.get("relates", 0) + 1
@@ -164,6 +166,19 @@ elif page == "Read Stories":
                     story["hugs"] = story.get("hugs", 0) + 1
                     save_stories(st.session_state.stories)
                     st.rerun()
+
+            # Protected Delete Expander
+            with st.expander("🗑️ Delete this story (Author Only)"):
+                entered_passcode = st.text_input("Enter the passcode you created for this story:", type="password", key=f"pass_{story.get('id', idx)}")
+                if st.button("Confirm Delete", key=f"confirm_del_{story.get('id', idx)}"):
+                    if entered_passcode == story.get("passcode"):
+                        st.session_state.stories = [s for s in st.session_state.stories if s.get("id") != story.get("id")]
+                        save_stories(st.session_state.stories)
+                        st.success("Story successfully deleted.")
+                        st.rerun()
+                    else:
+                        st.error("Incorrect passcode. Only the original author can delete this post.")
+
             st.divider()
 
 # PAGE 3: SHARE YOUR STORY
@@ -176,10 +191,11 @@ elif page == "Share Your Story":
         author = st.text_input("Your Name / Display Name (Leave as 'Anonymous' if preferred)", value="Anonymous")
         topic = st.selectbox("Primary Theme", ["Family & Separation", "Identity & Belonging", "Cultural Adjustment", "Intergenerational Differences", "Other"])
         content = st.text_area("Your Story or Reflection", height=200, help="Feel free to talk about missing family, navigating two cultures, or emotional moments.")
-        
+        passcode = st.text_input("Create a Delete Passcode (Used to edit/delete your post later)", type="password", help="Remember this code so you can delete your post if you choose to.")
+
         submitted = st.form_submit_button("Publish Story")
         if submitted:
-            if title and content:
+            if title and content and passcode:
                 new_id = len(st.session_state.stories) + 1
                 new_story = {
                     "id": new_id,
@@ -189,13 +205,14 @@ elif page == "Share Your Story":
                     "date": datetime.now().strftime("%Y-%m-%d"),
                     "content": content,
                     "relates": 0,
-                    "hugs": 0
+                    "hugs": 0,
+                    "passcode": passcode
                 }
                 st.session_state.stories.insert(0, new_story)
                 save_stories(st.session_state.stories)
-                st.success("Thank you for sharing your story! It is now permanently published in the community feed.")
+                st.success("Thank you for sharing your story! It is now published in the community feed.")
             else:
-                st.error("Please provide both a title and your story before submitting.")
+                st.error("Please fill in the title, story content, and create a delete passcode.")
 
 # PAGE 4: COMMUNITY DISCUSSIONS
 elif page == "Community Discussions":
