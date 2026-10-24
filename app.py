@@ -1,248 +1,211 @@
 import streamlit as st
 import pandas as pd
-import json
-import os
-from datetime import datetime
+import requests
+from datetime import datetime, timedelta
 
 # Page Configuration
 st.set_page_config(
-    page_title="Far From Home",
-    page_icon="🫶",
+    page_title="ClearBreathe — Asthma & Environmental Safety",
+    page_icon="🫁",
     layout="wide"
 )
 
 # Custom Styling
 st.markdown("""
     <style>
-    .main-title {
-        font-size: 2.8rem;
-        font-weight: bold;
-        color: #1E3A8A;
-        text-align: center;
-        margin-bottom: 0.2rem;
-    }
-    .sub-title {
-        font-size: 1.15rem;
-        text-align: center;
-        color: #4B5563;
-        margin-bottom: 2rem;
-        max-width: 800px;
-        margin-left: auto;
-        margin-right: auto;
-    }
-    .about-box {
-        background-color: #EBF8FF;
-        border-left: 5px solid #3182CE;
+    .score-green {
+        background-color: #DEF7EC;
+        border-left: 6px solid #0E9F6E;
         padding: 1.2rem;
         border-radius: 8px;
-        margin-bottom: 1.5rem;
+        color: #03543F;
+    }
+    .score-yellow {
+        background-color: #FEF08A;
+        border-left: 6px solid #CA8A04;
+        padding: 1.2rem;
+        border-radius: 8px;
+        color: #713F12;
+    }
+    .score-red {
+        background-color: #FDE8E8;
+        border-left: 6px solid #E02424;
+        padding: 1.2rem;
+        border-radius: 8px;
+        color: #9B1C1C;
+    }
+    .action-box {
+        background-color: #F3F4F6;
+        padding: 1rem;
+        border-radius: 8px;
+        border: 1px solid #D1D5DB;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# Data Persistence Functions (JSON Storage)
-DATA_FILE = "stories.json"
-
-def load_stories():
-    if not os.path.exists(DATA_FILE):
-        default_stories = [
-            {
-                "id": 1,
-                "title": "Caring for Grandparents Overseas",
-                "author": "Anonymous",
-                "topic": "Family & Separation",
-                "date": "2026-10-20",
-                "content": "The hardest part of living here isn't adjusting to the culture—it's the distance when loved ones get sick. Knowing my grandparents are ill overseas while I try to focus on daily life feels like carrying two separate worlds at once. I started this project so none of us have to carry that weight in silence.",
-                "relates": 12,
-                "hugs": 8,
-                "passcode": "1234"
-            },
-            {
-                "id": 2,
-                "title": "Caught Between Two Cultures",
-                "author": "Elena M.",
-                "topic": "Identity & Belonging",
-                "date": "2026-10-18",
-                "content": "When I visit my home country, people see me as American. But here, people see me as an immigrant. It took years to realize that feeling 'caught in between' isn't a weakness—it's a unique perspective that connects us with millions of others.",
-                "relates": 19,
-                "hugs": 15,
-                "passcode": "1234"
-            }
-        ]
-        with open(DATA_FILE, "w") as f:
-            json.dump(default_stories, f, indent=4)
-        return default_stories
+# ---------------------------------------------------------
+# CORE LOGIC: Unified Breathing Score Engine
+# ---------------------------------------------------------
+def calculate_breathing_score(pm25_aqi, ozone_aqi, pollen_level, smoke_flag):
+    """
+    Consolidates PM2.5, Ozone, Pollen, and Smoke into a unified Breathing Score:
+    - Green: Good conditions
+    - Yellow: Moderate conditions (caution for sensitive children)
+    - Red: Unhealthy conditions (action plan required)
+    """
+    max_aqi = max(pm25_aqi, ozone_aqi)
     
-    try:
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
-    except Exception:
-        return []
+    if max_aqi >= 150 or pollen_level == "High" or smoke_flag:
+        return "RED", "score-red", "🚨 High Air Hazard: Severe trigger warning across PM2.5/Pollen/Smoke. Follow Yellow/Red Action Plan steps."
+    elif max_aqi >= 80 or pollen_level == "Moderate":
+        return "YELLOW", "score-yellow", "⚠️ Moderate Trigger Warning: Consider pre-medicating before outdoor physical activity."
+    else:
+        return "GREEN", "score-green", "✅ Favorable Conditions: Low environmental asthma trigger risk detected."
 
-def save_stories(stories):
-    with open(DATA_FILE, "w") as f:
-        json.dump(stories, f, indent=4)
+# Sidebar Header & Quick Emergency Buttons
+st.sidebar.title("🫁 ClearBreathe")
+st.sidebar.markdown("**Child Profile:** Alex (Age 12)")
 
-# Load Stories into Session State
-if "stories" not in st.session_state:
-    st.session_state.stories = load_stories()
+st.sidebar.divider()
+st.sidebar.markdown("### 🚨 Emergency Action")
+col_e1, col_e2 = st.sidebar.columns(2)
+with col_e1:
+    if st.button("📞 Call Parent", use_container_width=True):
+        st.sidebar.success("Dialing Primary Guardian...")
+with col_e2:
+    if st.button("🩺 Call Doctor", use_container_width=True):
+        st.sidebar.info("Dialing Pediatrician...")
 
-# Title Header
-st.markdown('<div class="main-title">Far From Home 🕊️</div>', unsafe_allow_html=True)
-st.markdown(
-    '<div class="sub-title">A community platform exploring the emotional dimensions of immigration, identity, family separation, and living between two worlds.</div>', 
-    unsafe_allow_html=True
-)
+if st.sidebar.button("🚨 Call 911 / Find ER", type="primary", use_container_width=True):
+    st.sidebar.error("Initiating 911 Emergency Protocol...")
 
-# Sidebar Navigation
-st.sidebar.title("Far From Home")
-page = st.sidebar.radio("Explore", ["About the Project", "Read Stories", "Share Your Story", "Community Discussions", "Helpful Resources"])
+st.sidebar.divider()
 
-# PAGE 1: ABOUT THE PROJECT
-if page == "About the Project":
-    st.header("About Far From Home")
-    
-    st.markdown("""
-    <div class="about-box">
-        <h4>Mission & Inspiration</h4>
-        <p>Far From Home is a community-centered initiative exploring the psychological and emotional experiences of immigration. Moving to a new country is more than just relocation—it often means navigating identity, growing up between cultures, and dealing with family separation.</p>
-        <p>This project was created out of personal family experiences, specifically the emotional weight of caring about sick grandparents living overseas while navigating daily life in a different culture. Far From Home provides a space where immigrants, international students, and multi-generational families can share unspoken experiences and feel understood.</p>
+# Navigation
+page = st.sidebar.radio("Navigation", ["Daily Breathing Score", "Outlook & Alerts", "Trigger Diary (v2 Preview)", "Asthma Action Plan"])
+
+# ---------------------------------------------------------
+# PAGE 1: DAILY BREATHING SCORE
+# ---------------------------------------------------------
+if page == "Daily Breathing Score":
+    st.title("Today's Unified Breathing Score")
+    st.caption("Consolidating pollen, ozone, PM2.5, and smoke data into a single actionable metric.")
+
+    # Location Input / Environmental Data Controls
+    col_loc1, col_loc2 = st.columns([2, 1])
+    with col_loc1:
+        zip_code = st.text_input("Enter Zip Code:", value="78641")
+    with col_loc2:
+        st.write("")
+        st.write("")
+        st.caption(f"Showing data for Zip: **{zip_code}**")
+
+    # Mock Environmental API Inputs (Fetchable via AirNow / Open-Meteo APIs in production)
+    pm25 = 45        # PM2.5 AQI
+    ozone = 62       # Ozone AQI
+    pollen = "Moderate" # Cedar/Oak pollen indicator
+    smoke = False    # Wildfire smoke detector
+
+    score, css_class, summary = calculate_breathing_score(pm25, ozone, pollen, smoke)
+
+    # Display Unified Score Banner
+    st.markdown(f"""
+    <div class="{css_class}">
+        <h2>Current Status: {score}</h2>
+        <p style="font-size: 1.1rem; margin-bottom: 0;">{summary}</p>
     </div>
     """, unsafe_allow_html=True)
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric(label="Stories Shared", value=len(st.session_state.stories))
-    with col2:
-        total_relates = sum(s.get("relates", 0) for s in st.session_state.stories)
-        st.metric(label="Total 'I Relate' Reactions", value=total_relates)
-    with col3:
-        total_hugs = sum(s.get("hugs", 0) for s in st.session_state.stories)
-        st.metric(label="Support Hugs Sent", value=total_hugs)
+    st.divider()
 
-# PAGE 2: READ STORIES
-elif page == "Read Stories":
-    st.header("Community Stories")
-    st.write("Real experiences shared by immigrants, students, and families living between cultures.")
-
-    col_search, col_topic = st.columns([2, 1])
-    with col_search:
-        search_query = st.text_input("🔍 Search stories by keyword:", placeholder="e.g., grandparents, culture, language...")
-    with col_topic:
-        topics = ["All Topics", "Family & Separation", "Identity & Belonging", "Cultural Adjustment", "Intergenerational Differences"]
-        selected_topic = st.selectbox("Filter by theme:", topics)
+    # Breakdown Metrics
+    st.subheader("Environmental Factors Breakdown")
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric(label="PM2.5 Particles", value=f"{pm25} AQI", delta="Moderate" if pm25 > 50 else "Good")
+    m2.metric(label="Ozone Level", value=f"{ozone} AQI", delta="Caution" if ozone > 50 else "Good")
+    m3.metric(label="Pollen (Cedar/Oak)", value=pollen, delta="Rising")
+    m4.metric(label="Wildfire Smoke", value="Clear" if not smoke else "Detected")
 
     st.divider()
 
-    # Filter Logic
-    filtered_stories = st.session_state.stories
-    if selected_topic != "All Topics":
-        filtered_stories = [s for s in filtered_stories if s.get("topic") == selected_topic]
-    if search_query:
-        query = search_query.lower()
-        filtered_stories = [
-            s for s in filtered_stories 
-            if query in s.get("title", "").lower() or query in s.get("content", "").lower() or query in s.get("topic", "").lower()
+    # Backpack & School Readiness Checklist
+    st.subheader("🎒 Morning School Readiness Checklist")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.checkbox("Rescue Inhaler (Albuterol) in backpack", value=True)
+    with c2:
+        st.checkbox("Spacer device attached", value=True)
+    with c3:
+        st.checkbox("Asthma Action Plan copy with school nurse", value=True)
+
+# ---------------------------------------------------------
+# PAGE 2: OUTLOOK & ALERTS
+# ---------------------------------------------------------
+elif page == "Outlook & Alerts":
+    st.title("Tomorrow & Weekend Outlook")
+    st.write("Plan outdoor activities, soccer matches, and trips around projected air quality triggers.")
+
+    # 3-Day Forecast Table
+    forecast_data = {
+        "Day": ["Tomorrow (Friday)", "Saturday", "Sunday"],
+        "Projected Score": ["YELLOW", "RED", "GREEN"],
+        "Primary Trigger": ["Oak Pollen", "Wildfire Smoke + PM2.5", "Low Triggers"],
+        "Recommendation": [
+            "Pre-medicate before outdoor physical activity.",
+            "Consider indoor birthday/soccer alternatives.",
+            "Safe for extended outdoor play."
         ]
+    }
+    df_forecast = pd.DataFrame(forecast_data)
+    st.table(df_forecast)
 
-    if not filtered_stories:
-        st.info("No stories found matching your criteria. Be the first to share one!")
+    st.divider()
 
-    for idx, story in enumerate(filtered_stories):
-        with st.container():
-            st.subheader(story.get("title", "Untitled"))
-            st.caption(f"**Theme:** {story.get('topic')} | **Shared by:** {story.get('author')} | **Date:** {story.get('date')}")
-            st.write(story.get("content", ""))
-            
-            # Interactive Reactions & Passcode Deletion
-            col_r1, col_r2, col_space = st.columns([1.5, 1.5, 3])
-            with col_r1:
-                if st.button(f"🤝 I Relate ({story.get('relates', 0)})", key=f"relate_{story.get('id', idx)}"):
-                    story["relates"] = story.get("relates", 0) + 1
-                    save_stories(st.session_state.stories)
-                    st.rerun()
-            with col_r2:
-                if st.button(f"🫂 Send Hug ({story.get('hugs', 0)})", key=f"hug_{story.get('id', idx)}"):
-                    story["hugs"] = story.get("hugs", 0) + 1
-                    save_stories(st.session_state.stories)
-                    st.rerun()
-
-            # Protected Delete Expander
-            with st.expander("🗑️ Delete this story (Author Only)"):
-                entered_passcode = st.text_input("Enter the passcode you created for this story:", type="password", key=f"pass_{story.get('id', idx)}")
-                if st.button("Confirm Delete", key=f"confirm_del_{story.get('id', idx)}"):
-                    if entered_passcode == story.get("passcode"):
-                        st.session_state.stories = [s for s in st.session_state.stories if s.get("id") != story.get("id")]
-                        save_stories(st.session_state.stories)
-                        st.success("Story successfully deleted.")
-                        st.rerun()
-                    else:
-                        st.error("Incorrect passcode. Only the original author can delete this post.")
-
-            st.divider()
-
-# PAGE 3: SHARE YOUR STORY
-elif page == "Share Your Story":
-    st.header("Share Your Experience")
-    st.write("Your voice matters. Sharing your story helps others feel seen and less alone in their journey.")
-
-    with st.form("submit_story_form"):
-        title = st.text_input("Story Title")
-        author = st.text_input("Your Name / Display Name (Leave as 'Anonymous' if preferred)", value="Anonymous")
-        topic = st.selectbox("Primary Theme", ["Family & Separation", "Identity & Belonging", "Cultural Adjustment", "Intergenerational Differences", "Other"])
-        content = st.text_area("Your Story or Reflection", height=200, help="Feel free to talk about missing family, navigating two cultures, or emotional moments.")
-        passcode = st.text_input("Create a Delete Passcode (Used to edit/delete your post later)", type="password", help="Remember this code so you can delete your post if you choose to.")
-
-        submitted = st.form_submit_button("Publish Story")
-        if submitted:
-            if title and content and passcode:
-                new_id = len(st.session_state.stories) + 1
-                new_story = {
-                    "id": new_id,
-                    "title": title,
-                    "author": author,
-                    "topic": topic,
-                    "date": datetime.now().strftime("%Y-%m-%d"),
-                    "content": content,
-                    "relates": 0,
-                    "hugs": 0,
-                    "passcode": passcode
-                }
-                st.session_state.stories.insert(0, new_story)
-                save_stories(st.session_state.stories)
-                st.success("Thank you for sharing your story! It is now published in the community feed.")
-            else:
-                st.error("Please fill in the title, story content, and create a delete passcode.")
-
-# PAGE 4: COMMUNITY DISCUSSIONS
-elif page == "Community Discussions":
-    st.header("Open Dialogue")
-    st.write("A space to ask questions, offer support, or reflect on shared experiences.")
-
-    if "comments" not in st.session_state:
-        st.session_state.comments = [
-            {"user": "Maya", "text": "How do you all handle the anxiety of being far away during family emergencies?"},
-            {"user": "David", "text": "Setting up daily video calls with my parents helped us feel much closer despite the time zones."}
-        ]
-
-    for c in st.session_state.comments:
-        st.info(f"**{c['user']}:** {c['text']}")
-
-    with st.form("add_comment"):
-        user_name = st.text_input("Name", value="Community Member")
-        user_msg = st.text_area("Add to the conversation:")
-        if st.form_submit_button("Post Message"):
-            if user_msg:
-                st.session_state.comments.append({"user": user_name, "text": user_msg})
-                st.rerun()
-
-# PAGE 5: HELPFUL RESOURCES
-elif page == "Helpful Resources":
-    st.header("Support & Guidance")
-    st.write("Organizations and communities offering mental wellness, legal guidance, and newcomer support.")
+    st.subheader("🔔 Notification Settings")
+    st.time_input("Morning Backpack & Air Quality Alert Time:", value=datetime.strptime("07:15", "%H:%M").time())
+    st.time_input("Evening Next-Day Risk Alert Time:", value=datetime.strptime("20:00", "%H:%M").time())
     
-    st.markdown("""
-    * **Mental Health & Wellness:** Counseling services specializing in immigrant adjustment, cross-cultural stress, and family separation.
-    * **Family Support Networks:** Peer support groups for families with members living overseas.
-    * **Legal & Documentation Assistance:** Pro bono legal clinics for immigration guidance and residency resources.
-    """)
+    st.selectbox("Personal Sensitivity Threshold:", ["Alert on Yellow & Red Days (Recommended for Moderate/Severe)", "Alert on Red Days Only"])
+
+# ---------------------------------------------------------
+# PAGE 3: TRIGGER DIARY & TRACKERS (v2 PREVIEW)
+# ---------------------------------------------------------
+elif page == "Trigger Diary (v2 Preview)":
+    st.title("Trigger Diary & Inhaler Tracking")
+    st.write("Track daily symptoms to correlate personal triggers against regional pollen and air quality graphs.")
+
+    with st.form("diary_form"):
+        st.subheader("Log Today's Symptoms")
+        symptom_score = st.slider("Daily Symptom Rating (0 = None, 3 = Severe):", 0, 3, 1)
+        rescue_puffs = st.number_input("Rescue Inhaler Puffs Used Today:", min_value=0, max_value=20, value=1)
+        notes = st.text_area("Notes (e.g., played outdoor recess, coughing after running):")
+        
+        submitted = st.form_submit_button("Log Entry")
+        if submitted:
+            st.success("Entry recorded. Data will populate the doctor's monthly summary timeline.")
+
+    st.divider()
+
+    st.subheader("💊 Medication Counters")
+    col_med1, col_med2 = st.columns(2)
+    with col_med1:
+        st.metric(label="Rescue Inhaler Doses Remaining", value="142 / 200", delta="-2 today")
+        st.progress(142 / 200)
+    with col_med2:
+        st.metric(label="Controller Inhaler Streak", value="14 Days 🔥", delta="Daily Preventive")
+
+# ---------------------------------------------------------
+# PAGE 4: ASTHMA ACTION PLAN
+# ---------------------------------------------------------
+elif page == "Asthma Action Plan":
+    st.title("Digital Asthma Action Plan")
+    st.write("Direct instructions from your child's physician categorized by risk zone.")
+
+    st.subheader("🟢 Green Zone: Doing Well")
+    st.info("• Take Flovent 2 puffs every morning and night.\n• Use Albuterol 2 puffs 15 minutes before PE or exercise.")
+
+    st.subheader("🟡 Yellow Zone: Caution / Symptoms Present")
+    st.warning("• Coughing, wheezing, or Yellow Breathing Score day.\n• Continue controller medication.\n• Add Albuterol 2 puffs every 4 hours as needed.")
+
+    st.subheader("🔴 Red Zone: Medical Alert / Severe Symptoms")
+    st.error("• Severe breathing trouble, talking in short phrases.\n• Take Albuterol 4 puffs immediately.\n• Contact physician or proceed to urgent care/ER if symptoms do not improve within 15 minutes.")
