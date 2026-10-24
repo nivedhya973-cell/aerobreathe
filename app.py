@@ -3,14 +3,10 @@ import pandas as pd
 import json
 import os
 import requests
-from datetime import datetime
+from datetime import datetime, time
+import urllib.parse
 
-# =========================================================
-# DEVELOPER CONFIGURATION: API KEYS
-# Insert your API keys here. The end user will never see these.
-# =========================================================
-AIRNOW_API_KEY = ""        # EPA AirNow API Key (Get at docs.airnowapi.org)
-OPENWEATHER_API_KEY = ""   # OpenWeatherMap API Key (Get at openweathermap.org)
+AIRNOW_API_KEY = "D1C21388-5630-4BFC-BAFD-605FFFE1C8E2"   # <--- PASTE YOUR AIRNOW.GOV API KEY HERE
 
 # Page Configuration
 st.set_page_config(
@@ -101,6 +97,18 @@ st.markdown("""
     .call-parent:hover { background-color: #1D4ED8; }
     .call-doctor { background-color: #0D9488; }
     .call-doctor:hover { background-color: #0F766E; }
+
+    /* Calendar Link Button */
+    .cal-link-btn {
+        display: inline-block;
+        padding: 0.6rem 1.2rem;
+        background-color: #0284C7;
+        color: white !important;
+        border-radius: 8px;
+        text-decoration: none !important;
+        font-weight: 600;
+        margin-top: 0.5rem;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -129,14 +137,13 @@ if "current_user" not in st.session_state:
     st.session_state.current_user = None
 
 # ---------------------------------------------------------
-# AUTOMATIC REAL WEATHER & AIR QUALITY FETCH ENGINE
+# AUTOMATIC REAL AIRNOW API DATA FETCH ENGINE
 # ---------------------------------------------------------
 def fetch_live_environmental_data(zip_code):
     """
-    Uses the embedded API keys to fetch live weather and air quality for the given zip code.
-    Fallback values are used if keys are not supplied or API calls fail.
+    Uses AIRNOW_API_KEY to fetch live air quality data for the given zip code.
+    Fallback values are used if key is omitted or call fails.
     """
-    # 1. Try EPA AirNow API
     if AIRNOW_API_KEY:
         try:
             url = f"https://www.airnowapi.org/aq/observation/zipCode/current/?format=application/json&zipCode={zip_code}&distance=25&API_KEY={AIRNOW_API_KEY}"
@@ -144,26 +151,55 @@ def fetch_live_environmental_data(zip_code):
             if res:
                 pm25 = next((item['AQI'] for item in res if item['ParameterName'] == 'PM2.5'), 35)
                 ozone = next((item['AQI'] for item in res if item['ParameterName'] == 'O3'), 30)
-                return pm25, ozone, "Moderate", False, f"Live EPA AirNow Feed (Zip: {zip_code})"
+                return pm25, ozone, "Moderate", False, f"Live EPA AirNow API Feed (Zip: {zip_code})"
         except Exception:
             pass
 
-    # 2. Try OpenWeather API
-    if OPENWEATHER_API_KEY:
-        try:
-            geo_url = f"http://api.openweathermap.org/geo/1.0/zip?zip={zip_code},US&appid={OPENWEATHER_API_KEY}"
-            geo_res = requests.get(geo_url, timeout=4).json()
-            lat, lon = geo_res['lat'], geo_res['lon']
-            
-            air_url = f"http://api.openweathermap.org/data/2.5/air_pollution?lat={lat}&lon={lon}&appid={OPENWEATHER_API_KEY}"
-            air_res = requests.get(air_url, timeout=4).json()
-            aqi_val = air_res['list'][0]['main']['aqi'] * 25
-            return aqi_val, aqi_val - 5, "Moderate", False, f"Live OpenWeather Feed (Zip: {zip_code})"
-        except Exception:
-            pass
+    return 42, 38, "Moderate", False, f"Environmental Baseline Model (Zip: {zip_code})"
 
-    # Safe Baseline Fallback
-    return 42, 38, "Moderate", False, f"Environmental Model (Zip: {zip_code})"
+# ---------------------------------------------------------
+# CALENDAR GENERATOR UTILITIES
+# ---------------------------------------------------------
+def generate_gcal_link(title, time_str, child_name):
+    """Generates a Google Calendar event creation URL for phone alerts."""
+    now = datetime.now()
+    time_parts = time_str.split(":")
+    event_start = datetime(now.year, now.month, now.day, int(time_parts[0]), int(time_parts[1]))
+    event_end = datetime(now.year, now.month, now.day, int(time_parts[0]), int(time_parts[1]))
+    
+    start_fmt = event_start.strftime("%Y%m%dT%H%M00")
+    end_fmt = event_end.strftime("%Y%m%dT%H%M00")
+    
+    params = {
+        "action": "TEMPLATE",
+        "text": f"🫁 ClearBreathe: {title} ({child_name})",
+        "dates": f"{start_fmt}/{end_fmt}",
+        "details": f"Daily asthma medication and safety reminder for {child_name} via ClearBreathe.",
+        "recur": "RRULE:FREQ=DAILY"
+    }
+    return f"https://calendar.google.com/calendar/render?{urllib.parse.urlencode(params)}"
+
+def generate_ics_file(title, time_str, child_name):
+    """Generates an iCal (.ics) string for Apple Calendar phone alerts."""
+    now = datetime.now().strftime("%Y%m%d")
+    time_clean = time_str.replace(":", "") + "00"
+    
+    ics_content = f"""BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//ClearBreathe//Asthma Reminder//EN
+BEGIN:VEVENT
+SUMMARY:🫁 ClearBreathe: {title} ({child_name})
+DESCRIPTION:Daily asthma medication reminder for {child_name}.
+DTSTART:{now}T{time_clean}
+RRULE:FREQ=DAILY
+BEGIN:VALARM
+TRIGGER:-PT10M
+ACTION:DISPLAY
+DESCRIPTION:Reminder
+END:VALARM
+END:VEVENT
+END:VCALENDAR"""
+    return ics_content
 
 # ---------------------------------------------------------
 # ACCOUNT CREATION & LOGIN SYSTEM
@@ -322,26 +358,40 @@ if page == "Dashboard & Air Quality":
     m4.metric("Wildfire Smoke", "Detected" if smoke else "Clear")
 
 # ---------------------------------------------------------
-# PAGE 2: MEDICATION & CUSTOM REMINDERS
+# PAGE 2: MEDICATION & PHONE CALENDAR REMINDERS
 # ---------------------------------------------------------
 elif page == "Medication & Reminders":
-    st.title(f"Custom Medication Reminders for {user['child_name']}")
-    st.write("Set tailored daily reminders for morning controller doses, Budesonide before school, and backpack inhaler checks.")
+    st.title(f"Custom Medication & Phone Reminders — {user['child_name']}")
+    st.write("Set daily reminders and sync them directly with Google Calendar or Apple Calendar for phone alert notifications.")
 
-    # List Existing Reminders
+    # List Existing Reminders with Sync Buttons
     reminders = user.get("reminders", [])
     if reminders:
-        st.subheader("📋 Active Schedule")
-        for rem in reminders:
-            st.markdown(f"""
-            <div class="content-card" style="padding: 1rem; margin-bottom: 0.8rem; border-left: 5px solid #0EA5E9;">
-                <strong style="font-size: 1.1rem; color: #0F172A;">⏰ {rem['time']}</strong> — <span style="color: #334155;">{rem['task']}</span>
-            </div>
-            """, unsafe_allow_html=True)
-    else:
-        st.info("No custom reminders added yet. Create your first reminder below!")
+        st.subheader("📋 Active Reminders & Phone Alerts")
+        for idx, rem in enumerate(reminders):
+            with st.container():
+                st.markdown(f"""
+                <div class="content-card" style="padding: 1.2rem; margin-bottom: 1rem; border-left: 5px solid #0EA5E9;">
+                    <strong style="font-size: 1.2rem; color: #0F172A;">⏰ {rem['time']}</strong> — <span style="color: #334155; font-size: 1.1rem;">{rem['task']}</span>
+                </div>
+                """, unsafe_allow_html=True)
 
-    st.divider()
+                col_sync1, col_sync2, col_space = st.columns([1.5, 1.5, 3])
+                with col_sync1:
+                    gcal_url = generate_gcal_link(rem['task'], rem['time'], user['child_name'])
+                    st.markdown(f'<a href="{gcal_url}" target="_blank" class="cal-link-btn">📅 Sync to Google Calendar</a>', unsafe_allow_html=True)
+                with col_sync2:
+                    ics_data = generate_ics_file(rem['task'], rem['time'], user['child_name'])
+                    st.download_button(
+                        label="📲 Sync to Apple Calendar (.ics)",
+                        data=ics_data,
+                        file_name=f"ClearBreathe_Reminder_{idx+1}.ics",
+                        mime="text/calendar",
+                        key=f"ics_btn_{idx}"
+                    )
+                st.divider()
+    else:
+        st.info("No custom reminders added yet. Create your first reminder below to sync phone alerts!")
 
     # Form to Add Custom Reminders
     st.subheader("➕ Create New Reminder")
@@ -349,14 +399,14 @@ elif page == "Medication & Reminders":
         new_task = st.text_input("Reminder Description", placeholder="e.g., Do Budesonide nebulizer before school")
         new_time = st.time_input("Scheduled Time", value=datetime.strptime("07:30", "%H:%M").time())
         
-        if st.form_submit_button("Save Reminder"):
+        if st.form_submit_button("Save & Enable Phone Alerts"):
             if new_task:
                 user.setdefault("reminders", []).append({
                     "task": new_task,
                     "time": new_time.strftime("%H:%M")
                 })
                 save_users(st.session_state.users)
-                st.success("Custom reminder added!")
+                st.success("Custom reminder added! You can now sync it to your phone calendar.")
                 st.rerun()
 
 # ---------------------------------------------------------
