@@ -7,7 +7,7 @@ from datetime import datetime
 # Page Configuration
 st.set_page_config(
     page_title="Far From Home",
-    page_icon="🕊️",
+    page_icon="🫶",
     layout="wide"
 )
 
