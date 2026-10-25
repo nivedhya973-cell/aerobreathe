@@ -8,11 +8,11 @@ from datetime import datetime
 # =========================================================
 # 🔑 INPUT YOUR AIRNOW API KEY HERE
 # =========================================================
-AIRNOW_API_KEY = ""   # <--- PASTE YOUR AIRNOW.GOV API KEY HERE
+AIRNOW_API_KEY = "D1C21388-5630-4BFC-BAFD-605FFFE1C8E2"   # <--- PASTE YOUR AIRNOW.GOV API KEY HERE
 
 # Page Configuration
 st.set_page_config(
-    page_title="ClearBreathe — Family Asthma Management",
+    page_title="ClearBreathe — Family Asthma Tracker",
     page_icon="🫁",
     layout="wide"
 )
@@ -92,6 +92,18 @@ st.markdown("""
     }
     .call-parent { background-color: #2563EB; }
     .call-doctor { background-color: #0D9488; }
+
+    /* Footer Medical Disclaimer */
+    .medical-disclaimer {
+        margin-top: 3rem;
+        padding: 1rem;
+        background-color: #F1F5F9;
+        border-radius: 8px;
+        border: 1px solid #CBD5E1;
+        text-align: center;
+        font-size: 0.85rem;
+        color: #475569 !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -119,6 +131,13 @@ if "users" not in st.session_state:
 if "current_user" not in st.session_state:
     st.session_state.current_user = None
 
+def render_medical_disclaimer():
+    st.markdown("""
+        <div class="medical-disclaimer">
+            <strong>⚠️ Medical Disclaimer:</strong> ClearBreathe is an informational tool designed to help families monitor local air quality and track inhaler use. ClearBreathe does not provide medical advice, diagnosis, or treatment. Always consult your doctor or primary healthcare provider regarding any questions about a medical condition or asthma management plan.
+        </div>
+    """, unsafe_allow_html=True)
+
 # ---------------------------------------------------------
 # REAL AIRNOW API DATA FETCH ENGINE
 # ---------------------------------------------------------
@@ -143,14 +162,16 @@ if not st.session_state.current_user:
     st.markdown("""
         <div class="content-card" style="text-align: center;">
             <h1 style="margin: 0;">🫁 ClearBreathe</h1>
-            <p style="color: #475569; font-size: 1.05rem; margin-top: 0.4rem;">Family Asthma Safety & Environmental Intelligence</p>
+            <p style="color: #475569; font-size: 1.1rem; margin-top: 0.4rem;">
+                A simple daily tool for parents to check air quality, track inhaler usage, and keep emergency contacts one tap away.
+            </p>
         </div>
     """, unsafe_allow_html=True)
 
     tab_login, tab_signup = st.tabs(["🔑 Log In", "📝 Create Account"])
 
     with tab_login:
-        st.subheader("Log in to your account")
+        st.subheader("Welcome back")
         login_email = st.text_input("Parent Email / Username", placeholder="e.g., parent@example.com", key="login_email")
         login_pass = st.text_input("Password", type="password", placeholder="Enter password", key="login_pass")
         if st.button("Log In", use_container_width=True):
@@ -162,8 +183,8 @@ if not st.session_state.current_user:
                 st.error("Invalid email or password.")
 
     with tab_signup:
-        st.subheader("Account Setup")
-        st.write("Set up your family account using minimal details for location air quality tracking.")
+        st.subheader("Create an Account")
+        st.write("Sign up in seconds to see local weather triggers and store your emergency contact numbers.")
         
         with st.form("signup_form"):
             col_a1, col_a2 = st.columns(2)
@@ -173,16 +194,16 @@ if not st.session_state.current_user:
                 password = st.text_input("Create Password*", type="password", placeholder="Create password")
 
             st.divider()
-            st.markdown("### 📍 Location & Contacts")
+            st.markdown("### 📍 Your Location & Emergency Contacts")
             zip_code = st.text_input("Home Zip Code*", placeholder="e.g., 78641")
 
             col_p1, col_p2 = st.columns(2)
             with col_p1:
                 parent_phone = st.text_input("Parent Phone Number*", placeholder="e.g., 555-019-2831")
             with col_p2:
-                doctor_phone = st.text_input("Doctor / Pediatrician Phone*", placeholder="e.g., 555-014-9922")
+                doctor_phone = st.text_input("Doctor Office Phone*", placeholder="e.g., 555-014-9922")
 
-            signup_submit = st.form_submit_button("Complete Registration")
+            signup_submit = st.form_submit_button("Create Account")
             if signup_submit:
                 if email and password and zip_code and parent_phone and doctor_phone:
                     if email not in st.session_state.users:
@@ -208,7 +229,9 @@ if not st.session_state.current_user:
                     else:
                         st.error("Account already exists.")
                 else:
-                    st.error("Please complete all required fields (*).")
+                    st.error("Please fill in all required fields (*).")
+    
+    render_medical_disclaimer()
     st.stop()
 
 # ---------------------------------------------------------
@@ -218,12 +241,12 @@ user = st.session_state.users[st.session_state.current_user]
 
 st.sidebar.markdown(f"""
 <div style="background: #FFFFFF; padding: 1rem; border-radius: 10px; border: 1px solid #CBD5E1; margin-bottom: 1rem;">
-    <h4 style="margin:0; color:#0F172A;">Family Account</h4>
+    <h4 style="margin:0; color:#0F172A;">Account Overview</h4>
     <p style="margin:0; color:#64748B; font-size:0.9rem;">Zip Code: <strong>{user['zip_code']}</strong></p>
 </div>
 """, unsafe_allow_html=True)
 
-st.sidebar.markdown("### 📞 Direct Calling")
+st.sidebar.markdown("### 📞 One-Tap Emergency Call")
 parent_tel = f"tel:{user.get('parent_phone', '')}"
 doctor_tel = f"tel:{user.get('doctor_phone', '')}"
 
@@ -238,59 +261,60 @@ if st.sidebar.button("🚪 Log Out", use_container_width=True):
 # TOP NAVIGATION BAR
 page = st.segmented_control(
     "Select View",
-    ["Dashboard & Air Quality", "Log Medication & Puffs", "Symptom & Weather Analytics"],
-    default="Dashboard & Air Quality",
+    ["Today's Air Quality", "Log Inhaler Puffs", "Puffs vs. Weather Chart"],
+    default="Today's Air Quality",
     label_visibility="collapsed"
 )
 
 st.write("") 
 
 # PAGE 1: DASHBOARD
-if page == "Dashboard & Air Quality":
-    st.title("Today's Air Quality & Breathing Score")
+if page == "Today's Air Quality":
+    st.title("Today's Air Quality & Breathing Risk")
+    st.write("Check your local air quality and pollen levels before planning outdoor time.")
     
     pm25, ozone, pollen, smoke, source_text = fetch_live_environmental_data(user['zip_code'])
-    st.caption(f"📡 Data Feed: **{source_text}**")
+    st.caption(f"📡 Data Source: **{source_text}**")
 
     max_aqi = max(pm25, ozone)
     if max_aqi >= 100 or pollen == "High" or smoke:
-        score_status, banner_class, advice = "RED", "banner-red", "🚨 High Trigger Hazard: Elevated AQI/pollen detected. Limit prolonged outdoor physical activity."
+        score_status, banner_class, advice = "RED (High Risk)", "banner-red", "🚨 High trigger warning: Air quality or pollen is poor today. Limit outdoor playing time."
     elif max_aqi >= 50 or pollen == "Moderate":
-        score_status, banner_class, advice = "YELLOW", "banner-yellow", "⚠️ Moderate Trigger Risk: Air quality or pollen levels are elevated today."
+        score_status, banner_class, advice = "YELLOW (Moderate Risk)", "banner-yellow", "⚠️ Moderate trigger risk: Keep your rescue inhaler handy if spending time outdoors."
     else:
-        score_status, banner_class, advice = "GREEN", "banner-green", "✅ Favorable Conditions: Low environmental asthma trigger risk detected."
+        score_status, banner_class, advice = "GREEN (Low Risk)", "banner-green", "✅ Favorable conditions: Air quality and pollen levels are low today."
 
     st.markdown(f"""
     <div class="{banner_class}">
-        <h2 style="margin: 0; font-size: 2rem;">Breathing Score: {score_status}</h2>
+        <h2 style="margin: 0; font-size: 2rem;">Current Status: {score_status}</h2>
         <p style="margin-top: 0.4rem; font-size: 1.1rem; margin-bottom: 0;">{advice}</p>
     </div>
     """, unsafe_allow_html=True)
 
     st.divider()
 
-    st.subheader("📊 Live Environmental Breakdown")
+    st.subheader("📊 Local Weather Breakdown")
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("PM2.5 Particles", f"{pm25} AQI", delta="Moderate" if pm25 > 50 else "Good")
+    m1.metric("PM2.5 Dust & Particles", f"{pm25} AQI", delta="Moderate" if pm25 > 50 else "Good")
     m2.metric("Ozone Level", f"{ozone} AQI", delta="Elevated" if ozone > 50 else "Good")
     m3.metric("Pollen Level", pollen)
     m4.metric("Wildfire Smoke", "Detected" if smoke else "Clear")
 
-# PAGE 2: LOG MEDICATION
-elif page == "Log Medication & Puffs":
-    st.title("Log Daily Rescue Inhaler Usage")
-    st.write("Record daily rescue inhaler (Albuterol) puffs to track usage against weather and air quality trends.")
+# PAGE 2: LOG PUFFS
+elif page == "Log Inhaler Puffs":
+    st.title("Log Daily Inhaler Usage")
+    st.write("Keep a simple record of rescue inhaler puffs taken throughout the day.")
 
     pm25, ozone, pollen_str, smoke, _ = fetch_live_environmental_data(user['zip_code'])
     current_aqi = max(pm25, ozone)
 
     with st.form("puff_log_form"):
         log_date = st.date_input("Date", value=datetime.now())
-        puffs_taken = st.number_input("Albuterol / Rescue Puffs Taken Today:", min_value=0, max_value=25, value=0)
-        pollen_val = st.slider("Estimated Local Pollen Intensity (0 = Low, 100 = High):", 0, 100, 40)
-        notes = st.text_area("Notes / Symptoms Observed", placeholder="e.g., Wheezing after soccer practice")
+        puffs_taken = st.number_input("How many rescue inhaler puffs were taken today?", min_value=0, max_value=25, value=0)
+        pollen_val = st.slider("How high was pollen today? (0 = Low, 100 = High):", 0, 100, 40)
+        notes = st.text_area("Notes or Symptoms", placeholder="e.g., Coughing during sports practice")
 
-        if st.form_submit_button("Save Entry & Update Comparison Engine"):
+        if st.form_submit_button("Save Entry"):
             logs = user.setdefault("logs", [])
             new_entry = {
                 "date": log_date.strftime("%Y-%m-%d"),
@@ -300,28 +324,30 @@ elif page == "Log Medication & Puffs":
             }
             logs.append(new_entry)
             save_users(st.session_state.users)
-            st.success("Entry saved! View the updated trigger correlation graph under 'Symptom & Weather Analytics'.")
+            st.success("Entry saved! Check the 'Puffs vs. Weather Chart' tab to see your progress.")
 
 # PAGE 3: ANALYTICS
-elif page == "Symptom & Weather Analytics":
-    st.title("Weather vs. Asthma Symptom Comparison Engine")
-    st.write("This graph correlates daily rescue inhaler puffs against pollen and air quality levels over time.")
+elif page == "Puffs vs. Weather Chart":
+    st.title("Inhaler Usage vs. Local Weather")
+    st.write("This chart compares daily inhaler puffs against pollen and air pollution to help you spot environmental triggers.")
 
     logs = user.get("logs", [])
     if logs:
         df_logs = pd.DataFrame(logs)
         df_logs = df_logs.sort_values("date")
 
-        st.subheader("📈 Inhaler Puffs vs. Environmental Triggers Timeline")
+        st.subheader("📈 Trigger Correlation Chart")
         
         chart_data = df_logs.set_index("date")[["puffs", "aqi_level", "pollen_level"]]
-        chart_data.columns = ["Rescue Puffs Taken", "Air Quality Index (AQI)", "Pollen Level"]
+        chart_data.columns = ["Rescue Puffs Taken", "Air Pollution (AQI)", "Pollen Level"]
 
         st.line_chart(chart_data)
 
         st.divider()
 
-        st.subheader("📊 Symptom History Table")
+        st.subheader("📊 History Table")
         st.dataframe(df_logs, use_container_width=True)
     else:
-        st.info("No medication logs found yet. Log daily puffs to generate comparison analytics.")
+        st.info("No entries logged yet. Log daily puffs to generate your comparison chart.")
+
+render_medical_disclaimer()
