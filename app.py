@@ -86,22 +86,22 @@ st.markdown("""
 
     /* Score Banners */
     .banner-green {
-        background-color: #064E3B;
-        color: #ECFDF5 !important;
+        background-color: #DCFCE7;
+        color: #14532D !important;
         padding: 1.2rem;
         border-radius: 10px;
-        border-left: 6px solid #10B981;
+        border-left: 6px solid #22C55E;
     }
     .banner-yellow {
-        background-color: #78350F;
-        color: #FEF3C7 !important;
+        background-color: #FEF3C7;
+        color: #713F12 !important;
         padding: 1.2rem;
         border-radius: 10px;
-        border-left: 6px solid #F59E0B;
+        border-left: 6px solid #EAB308;
     }
     .banner-red {
-        background-color: #7F1D1D;
-        color: #FEF2F2 !important;
+        background-color: #FEE2E2;
+        color: #7F1D1D !important;
         padding: 1.2rem;
         border-radius: 10px;
         border-left: 6px solid #EF4444;
