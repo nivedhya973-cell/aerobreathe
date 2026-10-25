@@ -1,0 +1,56 @@
+{
+    "sujatexas21@gmail.com": {
+        "password": "pass",
+        "zip_code": "78641",
+        "parent_phone": "",
+        "doctor_phone": "",
+        "logs": [
+            {
+                "date": "2026-10-18",
+                "puffs": 0,
+                "aqi_level": 32,
+                "pollen_level": 25
+            },
+            {
+                "date": "2026-10-19",
+                "puffs": 1,
+                "aqi_level": 48,
+                "pollen_level": 40
+            },
+            {
+                "date": "2026-10-20",
+                "puffs": 3,
+                "aqi_level": 85,
+                "pollen_level": 75
+            },
+            {
+                "date": "2026-10-21",
+                "puffs": 2,
+                "aqi_level": 62,
+                "pollen_level": 55
+            },
+            {
+                "date": "2026-10-22",
+                "puffs": 4,
+                "aqi_level": 110,
+                "pollen_level": 95
+            },
+            {
+                "date": "2026-10-23",
+                "puffs": 1,
+                "aqi_level": 45,
+                "pollen_level": 30
+            }
+        ],
+        "reminders": [
+            {
+                "task": "Morning inhaler dose before school",
+                "time": "07:30"
+            },
+            {
+                "task": "Evening controller inhaler dose",
+                "time": "20:00"
+            }
+        ]
+    }
+}
