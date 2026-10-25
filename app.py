@@ -21,37 +21,37 @@ st.set_page_config(
 # High-Contrast Mobile & Dark-Mode Safe Styling
 st.markdown("""
     <style>
-    /* Global App Background */
+    /* Global app palette */
     .stApp, [data-testid="stAppViewContainer"], [data-testid="stSidebar"] {
-        background-color: #F3EBDD !important;
+        background-color: #EAF3F2 !important;
         font-family: 'Inter', system-ui, -apple-system, sans-serif;
     }
 
     /* Force Dark Text on Labels, Headings, and Prose for Mobile/Dark Mode */
     label, p, h1, h2, h3, h4, h5, h6, .stMarkdown, .stSelectbox label, .stNumberInput label {
-        color: #0F172A !important;
+        color: #203B43 !important;
         font-weight: 600 !important;
     }
 
-    /* Solid White Input Fields with Dark Borders */
+    /* Soft teal input fields with calm blue-green borders */
     .stTextInput input, .stTextArea textarea, .stNumberInput input, .stDateInput input {
-        background-color: #FFFFFF !important;
-        color: #0F172A !important;
-        border: 2px solid #334155 !important;
+        background-color: #F7FBFA !important;
+        color: #203B43 !important;
+        border: 2px solid #78999A !important;
         border-radius: 8px !important;
         font-size: 1rem !important;
         padding: 10px !important;
     }
 
     .stTextInput input::placeholder, .stTextArea textarea::placeholder {
-        color: #64748B !important;
+        color: #617B80 !important;
         opacity: 1 !important;
     }
 
     /* Dark Mode Button Overrides (Fixes Blacked-Out Buttons on Phones) */
     div.stButton > button, div[data-testid="stFormSubmitButton"] > button {
-        background-color: #86EFAC !important;
-        color: #14532D !important;
+        background-color: #B8D8CB !important;
+        color: #244B43 !important;
         border: none !important;
         border-radius: 8px !important;
         font-weight: 600 !important;
@@ -59,26 +59,26 @@ st.markdown("""
     }
 
     div.stButton > button:hover, div[data-testid="stFormSubmitButton"] > button:hover {
-        background-color: #4ADE80 !important;
-        color: #14532D !important;
+        background-color: #9FC8B8 !important;
+        color: #1D433B !important;
     }
 
     /* Page navigation */
     div[data-testid="stSegmentedControl"] [role="radio"] {
-        color: #166534 !important;
+        color: #456D70 !important;
     }
 
     div[data-testid="stSegmentedControl"] [role="radio"][aria-checked="true"] {
-        background-color: #86EFAC !important;
-        color: #14532D !important;
+        background-color: #B8D8CB !important;
+        color: #244B43 !important;
     }
 
     /* Feature Cards */
     .feature-card {
-        background: #E4DDCF;
+        background: #DCEAE8;
         padding: 1.5rem;
         border-radius: 12px;
-        border: 1px solid #B8AD9B;
+        border: 1px solid #B4CBC7;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
         height: 100%;
         margin-bottom: 1rem;
@@ -119,14 +119,14 @@ st.markdown("""
         color: #FFFFFF !important;
         margin-bottom: 0.6rem;
     }
-    .call-parent { background-color: #2563EB; }
-    .call-doctor { background-color: #0D9488; }
+    .call-parent { background-color: #537F98; }
+    .call-doctor { background-color: #5E8C79; }
 
     /* Calendar Link Button */
     .cal-link-btn {
         display: inline-block;
         padding: 0.6rem 1.2rem;
-        background-color: #0284C7;
+        background-color: #537F98;
         color: white !important;
         border-radius: 8px;
         text-decoration: none !important;
@@ -138,12 +138,18 @@ st.markdown("""
     .medical-disclaimer {
         margin-top: 3rem;
         padding: 1rem;
-        background-color: #D8D0C1;
+        background-color: #D4E3E0;
         border-radius: 8px;
-        border: 1px solid #B8AD9B;
+        border: 1px solid #AFC7C3;
         text-align: center;
         font-size: 0.85rem;
-        color: #475569 !important;
+        color: #38565D !important;
+    }
+
+    .content-card {
+        background: #DCEAE8;
+        border: 1px solid #B4CBC7;
+        border-radius: 8px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -244,12 +250,12 @@ END:VCALENDAR"""
 # ---------------------------------------------------------
 if not st.session_state.current_user:
     st.markdown("""
-        <div style="text-align: center; padding: 2rem 1rem; background: #E4DDCF; border-radius: 16px; border: 1px solid #B8AD9B; margin-bottom: 2rem;">
-            <h1 style="font-size: 3rem; color: #0F172A; margin: 0;">🫁 AeroBreathe</h1>
-            <p style="font-size: 1.3rem; color: #334155; margin-top: 0.5rem; font-weight: 500;">
+        <div style="text-align: center; padding: 2rem 1rem; background: #DCEAE8; border-radius: 16px; border: 1px solid #B4CBC7; margin-bottom: 2rem;">
+            <h1 style="font-size: 3rem; color: #203B43; margin: 0;">🫁 AeroBreathe</h1>
+            <p style="font-size: 1.3rem; color: #38565D; margin-top: 0.5rem; font-weight: 500;">
                 Smart, simple asthma safety and trigger tracking built for families.
             </p>
-            <p style="font-size: 1rem; color: #64748B; max-width: 650px; margin: 0.5rem auto 0 auto;">
+            <p style="font-size: 1rem; color: #617B80; max-width: 650px; margin: 0.5rem auto 0 auto;">
                 Aero translates real-time air quality data into daily action, helping parents track rescue inhaler usage against local pollen and ozone triggers without collecting sensitive personal information.
             </p>
         </div>
@@ -262,32 +268,32 @@ if not st.session_state.current_user:
     with col_f1:
         st.markdown("""
             <div class="feature-card">
-                <h3 style="margin-top:0; color:#0284C7;">📊 Real-Time AQI Feed</h3>
-                <p style="font-size:0.95rem; color:#475569;">Pulls live EPA AirNow PM2.5, Ozone, and pollen metrics for your exact zip code.</p>
+                <h3 style="margin-top:0; color:#537F98;">📊 Real-Time AQI Feed</h3>
+                <p style="font-size:0.95rem; color:#38565D;">Pulls live EPA AirNow PM2.5, Ozone, and pollen metrics for your exact zip code.</p>
             </div>
         """, unsafe_allow_html=True)
 
     with col_f2:
         st.markdown("""
             <div class="feature-card">
-                <h3 style="margin-top:0; color:#0D9488;">📈 Puff Analytics</h3>
-                <p style="font-size:0.95rem; color:#475569;">Correlates daily rescue inhaler usage against environmental spikes in an interactive chart.</p>
+                <h3 style="margin-top:0; color:#5E8C79;">📈 Puff Analytics</h3>
+                <p style="font-size:0.95rem; color:#38565D;">Correlates daily rescue inhaler usage against environmental spikes in an interactive chart.</p>
             </div>
         """, unsafe_allow_html=True)
 
     with col_f3:
         st.markdown("""
             <div class="feature-card">
-                <h3 style="margin-top:0; color:#2563EB;">📞 One-Tap Calling</h3>
-                <p style="font-size:0.95rem; color:#475569;">Keep optional emergency phone numbers one tap away during flare-ups.</p>
+                <h3 style="margin-top:0; color:#537F98;">📞 One-Tap Calling</h3>
+                <p style="font-size:0.95rem; color:#38565D;">Keep optional emergency phone numbers one tap away during flare-ups.</p>
             </div>
         """, unsafe_allow_html=True)
 
     with col_f4:
         st.markdown("""
             <div class="feature-card">
-                <h3 style="margin-top:0; color:#7C3AED;">📅 Calendar Sync</h3>
-                <p style="font-size:0.95rem; color:#475569;">Export daily medication reminders directly into Google Calendar or Apple Calendar.</p>
+                <h3 style="margin-top:0; color:#5E8C79;">📅 Calendar Sync</h3>
+                <p style="font-size:0.95rem; color:#38565D;">Export daily medication reminders directly into Google Calendar or Apple Calendar.</p>
             </div>
         """, unsafe_allow_html=True)
 
@@ -370,9 +376,9 @@ if not st.session_state.current_user:
 user = st.session_state.users[st.session_state.current_user]
 
 st.sidebar.markdown(f"""
-<div style="background: #E4DDCF; padding: 1rem; border-radius: 10px; border: 1px solid #B8AD9B; margin-bottom: 1rem;">
-    <h4 style="margin:0; color:#0F172A;">Account Overview</h4>
-    <p style="margin:0; color:#64748B; font-size:0.9rem;">Zip Code: <strong>{user['zip_code']}</strong></p>
+<div style="background: #DCEAE8; padding: 1rem; border-radius: 10px; border: 1px solid #B4CBC7; margin-bottom: 1rem;">
+    <h4 style="margin:0; color:#203B43;">Account Overview</h4>
+    <p style="margin:0; color:#617B80; font-size:0.9rem;">Zip Code: <strong>{user['zip_code']}</strong></p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -493,8 +499,8 @@ elif page == "Medication & Reminders":
         st.subheader("📋 Active Reminders & Phone Sync")
         for idx, rem in enumerate(reminders):
             st.markdown(f"""
-            <div class="content-card" style="padding: 1.2rem; margin-bottom: 0.8rem; border-left: 5px solid #0284C7;">
-                <strong style="font-size: 1.1rem; color: #0F172A;">⏰ {rem['time']}</strong> — <span style="color: #334155;">{rem['task']}</span>
+            <div class="content-card" style="padding: 1.2rem; margin-bottom: 0.8rem; border-left: 5px solid #537F98;">
+                <strong style="font-size: 1.1rem; color: #203B43;">⏰ {rem['time']}</strong> — <span style="color: #38565D;">{rem['task']}</span>
             </div>
             """, unsafe_allow_html=True)
 
