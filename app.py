@@ -3,7 +3,7 @@ import pandas as pd
 import json
 import os
 import requests
-from datetime import datetime
+from datetime import date, datetime, timedelta
 import urllib.parse
 
 # =========================================================
@@ -204,6 +204,119 @@ def fetch_live_environmental_data(zip_code):
 
     return 42, 38, 40, "Moderate", False, f"Baseline Environmental Feed (Zip: {zip_code})"
 
+def get_ai_api_key():
+    try:
+        secret_key = st.secrets.get("OPENAI_API_KEY")
+    except Exception:
+        secret_key = None
+    return secret_key or os.getenv("OPENAI_API_KEY")
+
+def ask_aero_ai(question, context):
+    api_key = get_ai_api_key()
+    if not api_key:
+        return None, "AI is not configured. Set OPENAI_API_KEY in the environment or Streamlit secrets."
+
+    system_prompt = (
+        "You are AeroBreathe, an environmental information assistant for caregivers. "
+        "You are not a clinician and must not diagnose, assess whether a child is safe to exercise, "
+        "or recommend starting, stopping, changing, or timing any medication. For medication questions, "
+        "direct the caregiver to the child's written asthma action plan and clinician. For severe or "
+        "rapidly worsening breathing symptoms, tell them to follow their emergency plan and seek urgent "
+        "medical help. Explain air-quality information in plain language, use only facts in the supplied "
+        "context, never invent hourly forecasts or pollutant-specific log data, and distinguish correlation "
+        "from causation. Keep the answer concise and practical."
+    )
+    try:
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={
+                "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Context:\n{context}\n\nQuestion:\n{question}"},
+                ],
+                "temperature": 0.3,
+            },
+            timeout=45,
+        )
+        response.raise_for_status()
+        answer = response.json()["choices"][0]["message"]["content"].strip()
+        if answer:
+            return answer, None
+        return None, "The AI service returned an empty response. Please try again."
+    except requests.RequestException:
+        return None, "The AI service could not be reached. Check the connection and API configuration, then try again."
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None, "The AI service returned an unreadable response. Please try again."
+
+def generate_doctor_report(logs, today=None):
+    today = today or date.today()
+    window_start = today - timedelta(days=29)
+    recent_entries = []
+
+    for entry in logs:
+        try:
+            entry_date = datetime.strptime(str(entry["date"]), "%Y-%m-%d").date()
+            puffs = max(0, int(float(entry.get("puffs", 0))))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if window_start <= entry_date <= today:
+            try:
+                aqi = float(entry["aqi_level"])
+            except (KeyError, TypeError, ValueError):
+                aqi = None
+            recent_entries.append((entry_date, puffs, aqi))
+
+    if not recent_entries:
+        return (
+            f"Doctor visit summary ({window_start:%b %d, %Y} to {today:%b %d, %Y})\n"
+            "No valid inhaler log entries were found in the last 30 days."
+        )
+
+    total_puffs = sum(puffs for _, puffs, _ in recent_entries)
+    logged_days = len({entry_date for entry_date, _, _ in recent_entries})
+    total_by_weekday = {}
+    for entry_date, puffs, _ in recent_entries:
+        weekday = entry_date.strftime("%A")
+        total_by_weekday[weekday] = total_by_weekday.get(weekday, 0) + puffs
+
+    lines = [
+        f"Doctor visit summary ({window_start:%b %d, %Y} to {today:%b %d, %Y})",
+        f"Logged rescue inhaler use: {total_puffs} puffs across {logged_days} logged days ({len(recent_entries)} entries).",
+    ]
+
+    aqI_covered_puffs = sum(
+        puffs for _, puffs, aqi in recent_entries if aqi is not None and aqi > 70
+    )
+    comparable_puffs = sum(
+        puffs for _, puffs, aqi in recent_entries if aqi is not None
+    )
+    if comparable_puffs:
+        high_aqi_percent = round(aqI_covered_puffs / comparable_puffs * 100)
+        lines.append(
+            f"Environmental overlap: {aqI_covered_puffs} of {comparable_puffs} puffs "
+            f"({high_aqi_percent}%) were logged on entries with stored AQI above 70. "
+            "Aero stores the higher of PM2.5 and ozone, so the log cannot identify which pollutant was higher."
+        )
+    else:
+        lines.append("Environmental overlap: no comparable AQI values were recorded with these entries.")
+
+    if total_puffs:
+        highest_count = max(total_by_weekday.values())
+        busiest_days = [
+            weekday for weekday, count in total_by_weekday.items()
+            if count == highest_count and count > 0
+        ]
+        if busiest_days:
+            day_label = " and ".join(busiest_days)
+            lines.append(f"Highest logged weekday use: {day_label} ({highest_count} puffs).")
+    else:
+        lines.append("No rescue inhaler puffs were recorded in this period.")
+
+    lines.append("These are user-entered observations, not a diagnosis or proof that air quality caused symptoms.")
+    return "\n".join(lines)
+
 # ---------------------------------------------------------
 # CALENDAR GENERATOR UTILITIES
 # ---------------------------------------------------------
@@ -399,7 +512,7 @@ if st.sidebar.button("🚪 Log Out", use_container_width=True):
 # TOP NAVIGATION BAR
 page = st.segmented_control(
     "Select View",
-    ["Today's Air Quality", "Log Inhaler Puffs", "Puffs vs. Weather Chart", "Medication & Reminders"],
+    ["Today's Air Quality", "Log Inhaler Puffs", "Puffs vs. Weather Chart", "Medication & Reminders", "Aero Assistant"],
     default="Today's Air Quality",
     label_visibility="collapsed"
 )
@@ -535,5 +648,113 @@ elif page == "Medication & Reminders":
                 save_users(st.session_state.users)
                 st.success("Custom reminder saved!")
                 st.rerun()
+
+elif page == "Aero Assistant":
+    st.title("Aero Assistant")
+    st.write("Environmental information and visit preparation for your family.")
+    st.caption(
+        "AI responses are informational, not medical advice. When submitted, your question and relevant "
+        "readings or summarized log data are sent to OpenAI. Doctor-report calculations are performed locally."
+    )
+
+    pm25, ozone, pollen_val, pollen_str, smoke, source_text = fetch_live_environmental_data(user["zip_code"])
+    current_environment = (
+        f"Current feed: PM2.5 AQI {pm25}; ozone AQI {ozone}; pollen index {pollen_val}/100 ({pollen_str}); "
+        f"wildfire smoke {'detected' if smoke else 'not detected'}; source: {source_text}. "
+        "These are current readings, not an hourly forecast."
+    )
+    recent_report = generate_doctor_report(user.get("logs", []))
+
+    outdoor_tab, visit_tab, terms_tab, report_tab = st.tabs(
+        ["Outdoor Advisor", "Visit Prep", "Explain a Term", "Doctor Report"]
+    )
+
+    with outdoor_tab:
+        st.caption(current_environment)
+        with st.form("outdoor_advisor_form"):
+            outdoor_question = st.text_area(
+                "What activity and time are you planning?",
+                placeholder="For example: Is an outdoor soccer practice at 4 PM a good idea today?",
+                key="outdoor_advisor_question",
+            )
+            outdoor_submit = st.form_submit_button("Get Environmental Guidance")
+        if outdoor_submit:
+            if outdoor_question.strip():
+                answer, error = ask_aero_ai(outdoor_question, current_environment)
+                st.session_state["aero_outdoor_answer"] = answer
+                st.session_state["aero_outdoor_error"] = error
+            else:
+                st.warning("Enter an activity or question first.")
+        if st.session_state.get("aero_outdoor_answer"):
+            st.markdown(st.session_state["aero_outdoor_answer"])
+        elif st.session_state.get("aero_outdoor_error"):
+            st.info(st.session_state["aero_outdoor_error"])
+
+    with visit_tab:
+        st.markdown("Share what is on your mind, and Aero can help organize questions for your clinician.")
+        with st.form("visit_prep_form"):
+            visit_question = st.text_area(
+                "What would you like to prepare for?",
+                placeholder="For example: What should I ask at our asthma check-up tomorrow?",
+                key="visit_prep_question",
+            )
+            visit_submit = st.form_submit_button("Prepare Questions")
+        if visit_submit:
+            if visit_question.strip():
+                answer, error = ask_aero_ai(
+                    visit_question,
+                    f"Recent log summary for context:\n{recent_report}",
+                )
+                st.session_state["aero_visit_answer"] = answer
+                st.session_state["aero_visit_error"] = error
+            else:
+                st.warning("Enter a question or concern first.")
+        if st.session_state.get("aero_visit_answer"):
+            st.markdown(st.session_state["aero_visit_answer"])
+        elif st.session_state.get("aero_visit_error"):
+            st.info(st.session_state["aero_visit_error"])
+
+    with terms_tab:
+        with st.form("term_explainer_form"):
+            term_question = st.text_area(
+                "Which air-quality or medical term should Aero explain?",
+                placeholder="For example: What is PM2.5, and why can it affect breathing?",
+                key="term_explainer_question",
+            )
+            term_submit = st.form_submit_button("Explain")
+        if term_submit:
+            if term_question.strip():
+                answer, error = ask_aero_ai(term_question, "No personal log data is needed for this explanation.")
+                st.session_state["aero_term_answer"] = answer
+                st.session_state["aero_term_error"] = error
+            else:
+                st.warning("Enter a term or question first.")
+        if st.session_state.get("aero_term_answer"):
+            st.markdown(st.session_state["aero_term_answer"])
+        elif st.session_state.get("aero_term_error"):
+            st.info(st.session_state["aero_term_error"])
+
+    with report_tab:
+        st.write("Create a concise, data-grounded summary for your child's next appointment.")
+        if st.button("Generate Doctor Report", key="generate_doctor_report"):
+            report = generate_doctor_report(user.get("logs", []))
+            st.session_state["aero_doctor_report"] = report
+            answer, error = ask_aero_ai(
+                "Prepare a concise pediatrician-ready version of this report. Preserve every number and caveat exactly. Do not add diagnoses or claim that an environmental reading caused inhaler use.",
+                report,
+            )
+            st.session_state["aero_doctor_report_ai"] = answer
+            st.session_state["aero_doctor_report_error"] = error
+
+        if st.session_state.get("aero_doctor_report"):
+            st.markdown("#### Calculated Summary")
+            st.text(st.session_state["aero_doctor_report"])
+            if st.session_state.get("aero_doctor_report_ai"):
+                st.markdown("#### AI-Prepared Version")
+                st.markdown(st.session_state["aero_doctor_report_ai"])
+            elif st.session_state.get("aero_doctor_report_error"):
+                st.info(
+                    f"The calculated summary is ready. {st.session_state['aero_doctor_report_error']}"
+                )
 
 render_medical_disclaimer()
