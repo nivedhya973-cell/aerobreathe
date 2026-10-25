@@ -22,8 +22,8 @@ st.set_page_config(
 st.markdown("""
     <style>
     /* Global App Background */
-    .stApp {
-        background-color: #F8FAFC !important;
+    .stApp, [data-testid="stAppViewContainer"], [data-testid="stSidebar"] {
+        background-color: #F3EBDD !important;
         font-family: 'Inter', system-ui, -apple-system, sans-serif;
     }
 
@@ -75,10 +75,10 @@ st.markdown("""
 
     /* Feature Cards */
     .feature-card {
-        background: #FFFFFF;
+        background: #E4DDCF;
         padding: 1.5rem;
         border-radius: 12px;
-        border: 1px solid #CBD5E1;
+        border: 1px solid #B8AD9B;
         box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
         height: 100%;
         margin-bottom: 1rem;
@@ -138,9 +138,9 @@ st.markdown("""
     .medical-disclaimer {
         margin-top: 3rem;
         padding: 1rem;
-        background-color: #F1F5F9;
+        background-color: #D8D0C1;
         border-radius: 8px;
-        border: 1px solid #CBD5E1;
+        border: 1px solid #B8AD9B;
         text-align: center;
         font-size: 0.85rem;
         color: #475569 !important;
@@ -175,7 +175,7 @@ if "current_user" not in st.session_state:
 def render_medical_disclaimer():
     st.markdown("""
         <div class="medical-disclaimer">
-            <strong>⚠️ Medical Disclaimer:</strong> Aero is an informational tool designed to help families monitor local air quality and track inhaler use. Aero does not provide medical advice, diagnosis, or treatment. Always consult your doctor or primary healthcare provider regarding any questions about a medical condition or asthma management plan.
+            <strong>⚠️ Medical Disclaimer:</strong> AeroBreathe is an informational tool designed to help families monitor local air quality and track inhaler use. AeroBreathe does not provide medical advice, diagnosis, or treatment. Always consult your doctor or primary healthcare provider regarding any questions about a medical condition or asthma management plan.
         </div>
     """, unsafe_allow_html=True)
 
@@ -244,7 +244,7 @@ END:VCALENDAR"""
 # ---------------------------------------------------------
 if not st.session_state.current_user:
     st.markdown("""
-        <div style="text-align: center; padding: 2rem 1rem; background: white; border-radius: 16px; border: 1px solid #CBD5E1; margin-bottom: 2rem;">
+        <div style="text-align: center; padding: 2rem 1rem; background: #E4DDCF; border-radius: 16px; border: 1px solid #B8AD9B; margin-bottom: 2rem;">
             <h1 style="font-size: 3rem; color: #0F172A; margin: 0;">🫁 AeroBreathe</h1>
             <p style="font-size: 1.3rem; color: #334155; margin-top: 0.5rem; font-weight: 500;">
                 Smart, simple asthma safety and trigger tracking built for families.
@@ -370,7 +370,7 @@ if not st.session_state.current_user:
 user = st.session_state.users[st.session_state.current_user]
 
 st.sidebar.markdown(f"""
-<div style="background: #FFFFFF; padding: 1rem; border-radius: 10px; border: 1px solid #CBD5E1; margin-bottom: 1rem;">
+<div style="background: #E4DDCF; padding: 1rem; border-radius: 10px; border: 1px solid #B8AD9B; margin-bottom: 1rem;">
     <h4 style="margin:0; color:#0F172A;">Account Overview</h4>
     <p style="margin:0; color:#64748B; font-size:0.9rem;">Zip Code: <strong>{user['zip_code']}</strong></p>
 </div>
