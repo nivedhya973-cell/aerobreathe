@@ -50,8 +50,8 @@ st.markdown("""
 
     /* Dark Mode Button Overrides (Fixes Blacked-Out Buttons on Phones) */
     div.stButton > button, div[data-testid="stFormSubmitButton"] > button {
-        background-color: #15803D !important;
-        color: #FFFFFF !important;
+        background-color: #86EFAC !important;
+        color: #14532D !important;
         border: none !important;
         border-radius: 8px !important;
         font-weight: 600 !important;
@@ -59,8 +59,8 @@ st.markdown("""
     }
 
     div.stButton > button:hover, div[data-testid="stFormSubmitButton"] > button:hover {
-        background-color: #166534 !important;
-        color: #FFFFFF !important;
+        background-color: #4ADE80 !important;
+        color: #14532D !important;
     }
 
     /* Page navigation */
@@ -69,8 +69,8 @@ st.markdown("""
     }
 
     div[data-testid="stSegmentedControl"] [role="radio"][aria-checked="true"] {
-        background-color: #15803D !important;
-        color: #FFFFFF !important;
+        background-color: #86EFAC !important;
+        color: #14532D !important;
     }
 
     /* Feature Cards */
@@ -245,7 +245,7 @@ END:VCALENDAR"""
 if not st.session_state.current_user:
     st.markdown("""
         <div style="text-align: center; padding: 2rem 1rem; background: white; border-radius: 16px; border: 1px solid #CBD5E1; margin-bottom: 2rem;">
-            <h1 style="font-size: 3rem; color: #0F172A; margin: 0;">🫁 Aero</h1>
+            <h1 style="font-size: 3rem; color: #0F172A; margin: 0;">🫁 AeroBreathe</h1>
             <p style="font-size: 1.3rem; color: #334155; margin-top: 0.5rem; font-weight: 500;">
                 Smart, simple asthma safety and trigger tracking built for families.
             </p>
