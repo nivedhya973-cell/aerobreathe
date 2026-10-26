@@ -2,14 +2,25 @@ import streamlit as st
 import pandas as pd
 import json
 import os
+import hashlib
+import hmac
 import requests
 from datetime import date, datetime, timedelta
 import urllib.parse
 
 # =========================================================
-# 🔑 INPUT YOUR AIRNOW API KEY HERE
+# KEYS ARE READ FROM .streamlit/secrets.toml (or environment)
+# GROQ_API_KEY = "gsk_..."
+# AIRNOW_API_KEY = "your-airnow-key"
 # =========================================================
-AIRNOW_API_KEY = "D1C21388-5630-4BFC-BAFD-605FFE1C8E2"   # Your EPA AirNow Key
+def get_secret(name):
+    try:
+        value = st.secrets.get(name)
+    except Exception:
+        value = None
+    return value or os.getenv(name)
+
+AIRNOW_API_KEY = get_secret("AIRNOW_API_KEY")
 
 # Page Configuration
 st.set_page_config(
@@ -64,13 +75,25 @@ st.markdown("""
     }
 
     /* Page navigation */
-    div[data-testid="stSegmentedControl"] [role="radio"] {
-        color: #456D70 !important;
+    div[data-testid="stSegmentedControl"] button,
+    div[data-testid="stSegmentedControl"] [role="radio"],
+    button[data-testid="stBaseButton-segmented_control"] {
+        background-color: #A9C7D6 !important;
+        color: #203B43 !important;
+        border-color: #78999A !important;
     }
 
-    div[data-testid="stSegmentedControl"] [role="radio"][aria-checked="true"] {
-        background-color: #B8D8CB !important;
-        color: #244B43 !important;
+    div[data-testid="stSegmentedControl"] button:hover,
+    button[data-testid="stBaseButton-segmented_control"]:hover {
+        background-color: #8FB4C7 !important;
+        color: #1D433B !important;
+    }
+
+    div[data-testid="stSegmentedControl"] [role="radio"][aria-checked="true"],
+    button[data-testid="stBaseButton-segmented_controlActive"] {
+        background-color: #537F98 !important;
+        color: #FFFFFF !important;
+        border-color: #537F98 !important;
     }
 
     /* Feature Cards */
@@ -105,6 +128,9 @@ st.markdown("""
         padding: 1.2rem;
         border-radius: 10px;
         border-left: 6px solid #EF4444;
+    }
+    .banner-green h2, .banner-yellow h2, .banner-red h2 {
+        color: inherit !important;
     }
 
     /* Direct Calling Buttons */
@@ -169,8 +195,50 @@ def load_users():
         return {}
 
 def save_users(users):
-    with open(USER_FILE, "w") as f:
-        json.dump(users, f, indent=4)
+    # Demo data is never written to disk
+    if st.session_state.get("demo"):
+        return
+    try:
+        with open(USER_FILE, "w") as f:
+            json.dump(users, f, indent=4)
+    except OSError:
+        st.warning("Could not save your data right now. Please try again.")
+
+def hash_password(pw, salt=None):
+    salt = salt or os.urandom(16).hex()
+    h = hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt), 200_000).hex()
+    return f"{salt}${h}"
+
+def check_password(pw, stored):
+    if "$" not in stored:  # legacy plaintext accounts still work
+        return hmac.compare_digest(pw, stored)
+    salt, h = stored.split("$", 1)
+    return hmac.compare_digest(hash_password(pw, salt).split("$", 1)[1], h)
+
+def build_demo_user():
+    """14 days of believable data with a visible ozone spike. Dates are relative to today."""
+    rows = [  # (puffs, AQI, note) oldest -> newest
+        (0, 34, ""), (1, 41, ""), (0, 38, ""), (0, 36, ""), (1, 47, ""),
+        (0, 44, ""), (2, 78, "Cough after recess"),
+        (5, 112, "High ozone day. Wheezing at soccer practice, stayed inside after"),
+        (4, 98, "Night cough, woke once"), (2, 66, "Better, still a little tight"),
+        (1, 52, ""), (0, 40, ""), (1, 45, ""), (1, 43, ""),
+    ]
+    today = date.today()
+    logs = [
+        {"date": (today - timedelta(days=len(rows) - 1 - i)).strftime("%Y-%m-%d"),
+         "puffs": p, "aqi_level": a, "notes": n}
+        for i, (p, a, n) in enumerate(rows)
+    ]
+    return {
+        "password": "", "zip_code": "78641",
+        "parent_phone": "5550142", "doctor_phone": "5550175",  # 555-01xx = fictional range
+        "logs": logs,
+        "reminders": [
+            {"task": "Morning controller inhaler (per asthma action plan)", "time": "07:30"},
+            {"task": "Evening controller inhaler (per asthma action plan)", "time": "20:00"},
+        ],
+    }
 
 if "users" not in st.session_state:
     st.session_state.users = load_users()
@@ -180,41 +248,87 @@ if "current_user" not in st.session_state:
 
 def render_medical_disclaimer():
     st.markdown("""
-        <div class="medical-disclaimer">
-            <strong>⚠️ Medical Disclaimer:</strong> AeroBreathe is an informational tool designed to help families monitor local air quality and track inhaler use. AeroBreathe does not provide medical advice, diagnosis, or treatment. Always consult your doctor or primary healthcare provider regarding any questions about a medical condition or asthma management plan.
-        </div>
+    <div class="medical-disclaimer">
+        <strong>⚠️ Medical Disclaimer:</strong> AeroBreathe is an informational tool designed to help families monitor local air quality and track inhaler use. AeroBreathe does not provide medical advice, diagnosis, or treatment. Always consult your doctor or primary healthcare provider regarding any questions about a medical condition or asthma management plan.
+    </div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# REAL AIRNOW API DATA FETCH ENGINE
+# LIVE AIR QUALITY (AirNow first, Open-Meteo fallback, cached 30 min)
+# Exceptions are NOT cached, so a failed fetch retries on the next click.
 # ---------------------------------------------------------
-def fetch_live_environmental_data(zip_code):
+@st.cache_data(ttl=1800, show_spinner="Fetching air quality…")
+def _fetch_env(zip_code):
     if AIRNOW_API_KEY:
         try:
-            url = f"https://www.airnowapi.org/aq/observation/zipCode/current/?format=application/json&zipCode={zip_code}&distance=25&API_KEY={AIRNOW_API_KEY}"
-            res = requests.get(url, timeout=4).json()
-            if res:
-                pm25 = next((item['AQI'] for item in res if item['ParameterName'] == 'PM2.5'), 35)
-                ozone = next((item['AQI'] for item in res if item['ParameterName'] == 'O3'), 30)
-                calc_pollen = min(100, int(max(pm25, ozone) * 0.85))
-                pollen_label = "High" if calc_pollen > 70 else ("Moderate" if calc_pollen > 35 else "Low")
-                return pm25, ozone, calc_pollen, pollen_label, False, f"Live EPA AirNow Feed (Zip: {zip_code})"
-        except Exception:
-            pass
+            r = requests.get(
+                "https://www.airnowapi.org/aq/observation/zipCode/current/",
+                params={"format": "application/json", "zipCode": zip_code,
+                        "distance": 25, "API_KEY": AIRNOW_API_KEY},
+                timeout=6,
+            )
+            r.raise_for_status()
+            rows = r.json()
+            pm25 = next((x["AQI"] for x in rows if x["ParameterName"] == "PM2.5"), None)
+            ozone = next((x["AQI"] for x in rows if x["ParameterName"] == "O3"), None)
+            if rows and (pm25 is not None or ozone is not None):
+                o = rows[0]
+                return {
+                    "pm25": pm25, "ozone": ozone, "source": "EPA AirNow",
+                    "observed": f"{o['DateObserved'].strip()} {int(o['HourObserved']):02d}:00 {o['LocalTimeZone']}",
+                }
+        except (requests.RequestException, ValueError, KeyError, TypeError):
+            pass  # fall through to Open-Meteo
 
-    return 42, 38, 40, "Moderate", False, f"Baseline Environmental Feed (Zip: {zip_code})"
+    geo = requests.get(f"https://api.zippopotam.us/us/{zip_code}", timeout=6)
+    geo.raise_for_status()
+    place = geo.json()["places"][0]
+    aq = requests.get(
+        "https://air-quality-api.open-meteo.com/v1/air-quality",
+        params={"latitude": place["latitude"], "longitude": place["longitude"],
+                "current": "us_aqi_pm2_5,us_aqi_ozone", "timezone": "auto"},
+        timeout=6,
+    )
+    aq.raise_for_status()
+    cur = aq.json()["current"]
+    return {
+        "pm25": cur.get("us_aqi_pm2_5"), "ozone": cur.get("us_aqi_ozone"),
+        "source": "Open-Meteo Air Quality",
+        "observed": cur["time"].replace("T", " ") + " (local)",
+    }
 
-def get_ai_api_key():
+def fetch_live_environmental_data(zip_code):
+    """Returns (env_dict, None) or (None, friendly_error). Never raises."""
     try:
-        secret_key = st.secrets.get("OPENAI_API_KEY")
+        env = _fetch_env(str(zip_code).strip())
+        if env["pm25"] is None and env["ozone"] is None:
+            raise ValueError("no readings")
+        return env, None
     except Exception:
-        secret_key = None
-    return secret_key or os.getenv("OPENAI_API_KEY")
+        return None, "Air-quality data is temporarily unavailable. Please try again in a few minutes."
+
+def max_aqi_of(env):
+    return max(v for v in (env["pm25"], env["ozone"]) if v is not None)
+
+def risk_level(env):
+    """Word + color + one action. Deliberately says nothing about medication timing."""
+    m = max_aqi_of(env)
+    if m >= 100:
+        return "RED", "banner-red", "Limit outdoor time and follow your child's asthma action plan."
+    if m >= 50:
+        return "YELLOW", "banner-yellow", "Outdoor play is okay. Keep the rescue inhaler in the backpack and watch for symptoms."
+    return "GREEN", "banner-green", "Good day to be outside. Keep the rescue inhaler with you as usual."
+
+# ---------------------------------------------------------
+# AI (GROQ) HELPERS
+# ---------------------------------------------------------
+def get_ai_api_key():
+    return get_secret("GROQ_API_KEY")
 
 def ask_aero_ai(question, context):
     api_key = get_ai_api_key()
     if not api_key:
-        return None, "AI is not configured. Set OPENAI_API_KEY in the environment or Streamlit secrets."
+        return None, "AI is not configured. Set GROQ_API_KEY in the environment or Streamlit secrets."
 
     system_prompt = (
         "You are AeroBreathe, an environmental information assistant for caregivers. "
@@ -228,10 +342,10 @@ def ask_aero_ai(question, context):
     )
     try:
         response = requests.post(
-            "https://api.openai.com/v1/chat/completions",
+            "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {api_key}"},
             json={
-                "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+                "model": os.getenv("GROQ_MODEL", "openai/gpt-oss-120b"),
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"Context:\n{context}\n\nQuestion:\n{question}"},
@@ -246,7 +360,7 @@ def ask_aero_ai(question, context):
             return answer, None
         return None, "The AI service returned an empty response. Please try again."
     except requests.RequestException:
-        return None, "The AI service could not be reached. Check the connection and API configuration, then try again."
+        return None, "The AI assistant is temporarily unavailable. Please try again in a moment."
     except (KeyError, IndexError, TypeError, ValueError):
         return None, "The AI service returned an unreadable response. Please try again."
 
@@ -286,16 +400,16 @@ def generate_doctor_report(logs, today=None):
         f"Logged rescue inhaler use: {total_puffs} puffs across {logged_days} logged days ({len(recent_entries)} entries).",
     ]
 
-    aqI_covered_puffs = sum(
+    high_aqi_puffs = sum(
         puffs for _, puffs, aqi in recent_entries if aqi is not None and aqi > 70
     )
     comparable_puffs = sum(
         puffs for _, puffs, aqi in recent_entries if aqi is not None
     )
     if comparable_puffs:
-        high_aqi_percent = round(aqI_covered_puffs / comparable_puffs * 100)
+        high_aqi_percent = round(high_aqi_puffs / comparable_puffs * 100)
         lines.append(
-            f"Environmental overlap: {aqI_covered_puffs} of {comparable_puffs} puffs "
+            f"Environmental overlap: {high_aqi_puffs} of {comparable_puffs} puffs "
             f"({high_aqi_percent}%) were logged on entries with stored AQI above 70. "
             "Aero stores the higher of PM2.5 and ozone, so the log cannot identify which pollutant was higher."
         )
@@ -322,18 +436,15 @@ def generate_doctor_report(logs, today=None):
 # ---------------------------------------------------------
 def generate_gcal_link(title, time_str):
     now = datetime.now()
-    time_parts = time_str.split(":")
-    event_start = datetime(now.year, now.month, now.day, int(time_parts[0]), int(time_parts[1]))
-    event_end = datetime(now.year, now.month, now.day, int(time_parts[0]), int(time_parts[1]))
-    
-    start_fmt = event_start.strftime("%Y%m%dT%H%M00")
-    end_fmt = event_end.strftime("%Y%m%dT%H%M00")
-    
+    hh, mm = (int(p) for p in time_str.split(":")[:2])
+    event_start = datetime(now.year, now.month, now.day, hh, mm)
+    event_end = event_start + timedelta(minutes=15)
+
     params = {
         "action": "TEMPLATE",
         "text": f"🫁 Aero Reminder: {title}",
-        "dates": f"{start_fmt}/{end_fmt}",
-        "details": "Daily asthma medication and safety reminder via Aero.",
+        "dates": f"{event_start:%Y%m%dT%H%M00}/{event_end:%Y%m%dT%H%M00}",
+        "details": "Daily asthma reminder via Aero.",
         "recur": "RRULE:FREQ=DAILY"
     }
     return f"https://calendar.google.com/calendar/render?{urllib.parse.urlencode(params)}"
@@ -341,13 +452,15 @@ def generate_gcal_link(title, time_str):
 def generate_ics_file(title, time_str):
     now = datetime.now().strftime("%Y%m%d")
     time_clean = time_str.replace(":", "") + "00"
-    
+
     return f"""BEGIN:VCALENDAR
 VERSION:2.0
 PRODID:-//Aero//Asthma Reminder//EN
 BEGIN:VEVENT
+UID:{now}{time_clean}-{abs(hash(title))}@aerobreathe
+DTSTAMP:{now}T{time_clean}
 SUMMARY:🫁 Aero: {title}
-DESCRIPTION:Daily asthma medication reminder via Aero.
+DESCRIPTION:Daily asthma reminder via Aero.
 DTSTART:{now}T{time_clean}
 RRULE:FREQ=DAILY
 BEGIN:VALARM
@@ -363,16 +476,23 @@ END:VCALENDAR"""
 # ---------------------------------------------------------
 if not st.session_state.current_user:
     st.markdown("""
-        <div style="text-align: center; padding: 2rem 1rem; background: #DCEAE8; border-radius: 16px; border: 1px solid #B4CBC7; margin-bottom: 2rem;">
-            <h1 style="font-size: 3rem; color: #203B43; margin: 0;">🫁 AeroBreathe</h1>
-            <p style="font-size: 1.3rem; color: #38565D; margin-top: 0.5rem; font-weight: 500;">
-                Smart, simple asthma safety and trigger tracking built for families.
-            </p>
-            <p style="font-size: 1rem; color: #617B80; max-width: 650px; margin: 0.5rem auto 0 auto;">
-                Aero translates real-time air quality data into daily action, helping parents track rescue inhaler usage against local pollen and ozone triggers without collecting sensitive personal information.
-            </p>
-        </div>
+    <div style="text-align: center; padding: 2rem 1rem; background: #DCEAE8; border-radius: 16px; border: 1px solid #B4CBC7; margin-bottom: 1rem;">
+        <h1 style="font-size: 3rem; color: #203B43; margin: 0;">🫁 AeroBreathe</h1>
+        <p style="font-size: 1.3rem; color: #38565D; margin-top: 0.5rem; font-weight: 500;">
+            Smart, simple asthma safety and trigger tracking built for families.
+        </p>
+        <p style="font-size: 1rem; color: #617B80; max-width: 700px; margin: 0.5rem auto 0 auto;">
+            Aero translates local air-quality readings into a daily action and lets parents compare rescue inhaler use against air quality. It stores only what it needs to run: your email, ZIP code, optional phone numbers, and the entries you log. Nothing is sold or shared.
+        </p>
+    </div>
     """, unsafe_allow_html=True)
+
+    if st.button("▶ View Live Demo — no sign-up needed", type="primary", use_container_width=True):
+        st.session_state.demo = True
+        st.session_state.current_user = "demo"
+        st.session_state.demo_user = build_demo_user()
+        st.rerun()
+    st.caption("If the app was asleep, the first load can take up to a minute. Thanks for your patience!")
 
     # Core Features Showcase Grid
     st.markdown("### ⚡ Key Features")
@@ -380,34 +500,34 @@ if not st.session_state.current_user:
 
     with col_f1:
         st.markdown("""
-            <div class="feature-card">
-                <h3 style="margin-top:0; color:#537F98;">📊 Real-Time AQI Feed</h3>
-                <p style="font-size:0.95rem; color:#38565D;">Pulls live EPA AirNow PM2.5, Ozone, and pollen metrics for your exact zip code.</p>
-            </div>
+        <div class="feature-card">
+            <h3 style="margin-top:0; color:#537F98;">📊 Live Air Quality</h3>
+            <p style="font-size:0.95rem; color:#38565D;">Pulls current EPA AirNow PM2.5 and ozone readings for your ZIP code.</p>
+        </div>
         """, unsafe_allow_html=True)
 
     with col_f2:
         st.markdown("""
-            <div class="feature-card">
-                <h3 style="margin-top:0; color:#5E8C79;">📈 Puff Analytics</h3>
-                <p style="font-size:0.95rem; color:#38565D;">Correlates daily rescue inhaler usage against environmental spikes in an interactive chart.</p>
-            </div>
+        <div class="feature-card">
+            <h3 style="margin-top:0; color:#5E8C79;">📈 Puff Analytics</h3>
+            <p style="font-size:0.95rem; color:#38565D;">Compares daily rescue inhaler usage against air quality so patterns are easy to spot.</p>
+        </div>
         """, unsafe_allow_html=True)
 
     with col_f3:
         st.markdown("""
-            <div class="feature-card">
-                <h3 style="margin-top:0; color:#537F98;">📞 One-Tap Calling</h3>
-                <p style="font-size:0.95rem; color:#38565D;">Keep optional emergency phone numbers one tap away during flare-ups.</p>
-            </div>
+        <div class="feature-card">
+            <h3 style="margin-top:0; color:#537F98;">📞 One-Tap Calling</h3>
+            <p style="font-size:0.95rem; color:#38565D;">Keep optional emergency phone numbers one tap away during flare-ups.</p>
+        </div>
         """, unsafe_allow_html=True)
 
     with col_f4:
         st.markdown("""
-            <div class="feature-card">
-                <h3 style="margin-top:0; color:#5E8C79;">📅 Calendar Sync</h3>
-                <p style="font-size:0.95rem; color:#38565D;">Export daily medication reminders directly into Google Calendar or Apple Calendar.</p>
-            </div>
+        <div class="feature-card">
+            <h3 style="margin-top:0; color:#5E8C79;">📅 Calendar Sync</h3>
+            <p style="font-size:0.95rem; color:#38565D;">Export daily reminders directly into Google Calendar or Apple Calendar.</p>
+        </div>
         """, unsafe_allow_html=True)
 
     st.divider()
@@ -420,7 +540,9 @@ if not st.session_state.current_user:
         login_email = st.text_input("Parent Email / Username", placeholder="e.g., parent@example.com", key="login_email")
         login_pass = st.text_input("Password", type="password", placeholder="Enter password", key="login_pass")
         if st.button("Log In", use_container_width=True):
-            if login_email in st.session_state.users and st.session_state.users[login_email]["password"] == login_pass:
+            u = st.session_state.users.get(login_email)
+            if u and check_password(login_pass, u["password"]):
+                st.session_state.demo = False
                 st.session_state.current_user = login_email
                 st.success("Log in successful!")
                 st.rerun()
@@ -429,8 +551,8 @@ if not st.session_state.current_user:
 
     with tab_signup:
         st.subheader("Create an Account")
-        st.write("Sign up in seconds to start tracking weather triggers.")
-        
+        st.write("Sign up in seconds to start tracking air-quality triggers.")
+
         with st.form("signup_form"):
             col_a1, col_a2 = st.columns(2)
             with col_a1:
@@ -452,23 +574,16 @@ if not st.session_state.current_user:
             if signup_submit:
                 if email and password and zip_code:
                     if email not in st.session_state.users:
-                        default_logs = [
-                            {"date": "2026-10-18", "puffs": 0, "aqi_level": 32, "pollen_level": 25},
-                            {"date": "2026-10-19", "puffs": 1, "aqi_level": 48, "pollen_level": 40},
-                            {"date": "2026-10-20", "puffs": 3, "aqi_level": 85, "pollen_level": 75},
-                            {"date": "2026-10-21", "puffs": 2, "aqi_level": 62, "pollen_level": 55},
-                            {"date": "2026-10-22", "puffs": 4, "aqi_level": 110, "pollen_level": 95},
-                            {"date": "2026-10-23", "puffs": 1, "aqi_level": 45, "pollen_level": 30},
-                        ]
+                        st.session_state.demo = False
                         st.session_state.users[email] = {
-                            "password": password,
-                            "zip_code": zip_code,
+                            "password": hash_password(password),
+                            "zip_code": zip_code.strip(),
                             "parent_phone": parent_phone.replace("-", "").replace(" ", "") if parent_phone else "",
                             "doctor_phone": doctor_phone.replace("-", "").replace(" ", "") if doctor_phone else "",
-                            "logs": default_logs,
+                            "logs": [],
                             "reminders": [
-                                {"task": "Morning inhaler dose before school", "time": "07:30"},
-                                {"task": "Evening controller inhaler dose", "time": "20:00"}
+                                {"task": "Morning inhaler (per asthma action plan)", "time": "07:30"},
+                                {"task": "Evening inhaler (per asthma action plan)", "time": "20:00"}
                             ]
                         }
                         save_users(st.session_state.users)
@@ -479,14 +594,22 @@ if not st.session_state.current_user:
                         st.error("Account already exists.")
                 else:
                     st.error("Please fill in required fields (*).")
-    
+
     render_medical_disclaimer()
     st.stop()
 
 # ---------------------------------------------------------
 # LOGGED IN DASHBOARD
 # ---------------------------------------------------------
-user = st.session_state.users[st.session_state.current_user]
+if st.session_state.get("demo"):
+    user = st.session_state.get("demo_user") or build_demo_user()
+    st.session_state.demo_user = user
+    st.sidebar.info("🎬 Demo profile (ZIP 78641). Changes aren't saved.")
+else:
+    user = st.session_state.users.get(st.session_state.current_user)
+    if user is None:  # users.json was reset (free hosting) or account removed
+        st.session_state.current_user = None
+        st.rerun()
 
 st.sidebar.markdown(f"""
 <div style="background: #DCEAE8; padding: 1rem; border-radius: 10px; border: 1px solid #B4CBC7; margin-bottom: 1rem;">
@@ -505,8 +628,9 @@ if user.get("parent_phone") or user.get("doctor_phone"):
         st.sidebar.markdown(f'<a href="{doctor_tel}" class="call-btn call-doctor">🩺 Call Doctor ({user["doctor_phone"]})</a>', unsafe_allow_html=True)
 
 st.sidebar.divider()
-if st.sidebar.button("🚪 Log Out", use_container_width=True):
+if st.sidebar.button("🚪 Log Out" if not st.session_state.get("demo") else "🚪 Exit Demo", use_container_width=True):
     st.session_state.current_user = None
+    st.session_state.demo = False
     st.rerun()
 
 # TOP NAVIGATION BAR
@@ -516,91 +640,107 @@ page = st.segmented_control(
     default="Today's Air Quality",
     label_visibility="collapsed"
 )
+page = page or "Today's Air Quality"
 
-st.write("") 
+st.write("")
 
 # PAGE 1: DASHBOARD
 if page == "Today's Air Quality":
     st.title("Today's Air Quality & Breathing Risk")
-    st.write("Check your local air quality and pollen levels before planning outdoor time.")
-    
-    pm25, ozone, pollen_val, pollen_str, smoke, source_text = fetch_live_environmental_data(user['zip_code'])
-    st.caption(f"📡 Data Source: **{source_text}**")
+    st.write("Check your local air quality before planning outdoor time.")
 
-    max_aqi = max(pm25, ozone)
-    if max_aqi >= 100 or pollen_str == "High" or smoke:
-        score_status, banner_class, advice = "RED (High Risk)", "banner-red", "🚨 High trigger warning: Air quality or pollen is poor today. Limit outdoor playing time."
-    elif max_aqi >= 50 or pollen_str == "Moderate":
-        score_status, banner_class, advice = "YELLOW (Moderate Risk)", "banner-yellow", "⚠️ Moderate trigger risk: Keep your rescue inhaler handy if spending time outdoors."
+    env, env_error = fetch_live_environmental_data(user["zip_code"])
+    if env_error:
+        st.warning(env_error)
+        if st.button("Try again"):
+            st.cache_data.clear()
+            st.rerun()
     else:
-        score_status, banner_class, advice = "GREEN (Low Risk)", "banner-green", "✅ Favorable conditions: Air quality and pollen levels are low today."
+        st.caption(
+            f"📡 Data: **{env['source']}** · Observed {env['observed']} · "
+            f"refreshed at most every 30 min"
+        )
+        word, banner_class, action = risk_level(env)
+        st.markdown(f"""
+        <div class="{banner_class}">
+            <h2 style="margin: 0; font-size: 1.8rem;">{word} — {action}</h2>
+        </div>
+        """, unsafe_allow_html=True)
 
-    st.markdown(f"""
-    <div class="{banner_class}">
-        <h2 style="margin: 0; font-size: 2rem;">Current Status: {score_status}</h2>
-        <p style="margin-top: 0.4rem; font-size: 1.1rem; margin-bottom: 0;">{advice}</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.divider()
-
-    st.subheader("📊 Local Weather Breakdown")
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("PM2.5 Dust & Particles", f"{pm25} AQI", delta="Moderate" if pm25 > 50 else "Good")
-    m2.metric("Ozone Level", f"{ozone} AQI", delta="Elevated" if ozone > 50 else "Good")
-    m3.metric("Pollen Index", f"{pollen_val} / 100 ({pollen_str})")
-    m4.metric("Wildfire Smoke", "Detected" if smoke else "Clear")
+        st.divider()
+        st.subheader("📊 Local Air Quality")
+        m1, m2 = st.columns(2)
+        fmt = lambda v: "n/a" if v is None else f"{v} AQI"
+        m1.metric("PM2.5 (dust & smoke particles)", fmt(env["pm25"]),
+                  delta=None if env["pm25"] is None else ("Moderate or higher" if env["pm25"] > 50 else "Good"),
+                  delta_color="off")
+        m2.metric("Ozone", fmt(env["ozone"]),
+                  delta=None if env["ozone"] is None else ("Elevated" if env["ozone"] > 50 else "Good"),
+                  delta_color="off")
 
 # PAGE 2: LOG PUFFS
 elif page == "Log Inhaler Puffs":
     st.title("Log Daily Inhaler Usage")
     st.write("Keep a simple record of rescue inhaler puffs taken throughout the day.")
 
-    pm25, ozone, auto_pollen_val, pollen_str, smoke, _ = fetch_live_environmental_data(user['zip_code'])
-    current_aqi = max(pm25, ozone)
-
-    st.info(f"📍 **Automatic Environmental Sync (Zip {user['zip_code']}):** AQI: **{current_aqi}** | Pollen Level: **{auto_pollen_val}/100 ({pollen_str})**")
+    env, env_error = fetch_live_environmental_data(user["zip_code"])
+    current_aqi = max_aqi_of(env) if env else None
+    if env:
+        st.info(f"📍 Current AQI for ZIP {user['zip_code']}: **{current_aqi}** ({env['source']}). "
+                "AQI is saved only for entries dated today.")
+    else:
+        st.warning(env_error + " You can still save an entry without an AQI value.")
 
     with st.form("puff_log_form"):
-        log_date = st.date_input("Date", value=datetime.now())
-        puffs_taken = st.number_input("How many rescue inhaler puffs were taken today?", min_value=0, max_value=25, value=0)
+        log_date = st.date_input("Date", value=date.today(), max_value=date.today())
+        puffs_taken = st.number_input("Rescue inhaler puffs taken", min_value=0, max_value=25, value=0)
         notes = st.text_area("Notes or Symptoms", placeholder="e.g., Coughing during sports practice")
 
         if st.form_submit_button("Save Entry"):
-            logs = user.setdefault("logs", [])
-            new_entry = {
+            user.setdefault("logs", []).append({
                 "date": log_date.strftime("%Y-%m-%d"),
-                "puffs": puffs_taken,
-                "aqi_level": current_aqi,
-                "pollen_level": auto_pollen_val
-            }
-            logs.append(new_entry)
+                "puffs": int(puffs_taken),
+                "aqi_level": current_aqi if log_date == date.today() else None,
+                "notes": notes.strip(),
+            })
             save_users(st.session_state.users)
             st.success("Entry saved! Check the 'Puffs vs. Weather Chart' tab to see your progress.")
 
 # PAGE 3: ANALYTICS
 elif page == "Puffs vs. Weather Chart":
-    st.title("Inhaler Usage vs. Local Weather")
-    st.write("This chart compares daily inhaler puffs against pollen and air pollution to help you spot environmental triggers.")
+    st.title("Inhaler Usage vs. Air Quality")
+    st.write("Compare rescue inhaler puffs against local air quality to help spot environmental triggers.")
 
     logs = user.get("logs", [])
     if logs:
-        df_logs = pd.DataFrame(logs)
-        df_logs = df_logs.sort_values("date")
+        df = pd.DataFrame(logs)
+        if "aqi_level" not in df:
+            df["aqi_level"] = None
+        if "notes" not in df:
+            df["notes"] = ""
+        df["aqi_level"] = pd.to_numeric(df["aqi_level"], errors="coerce")
+        df = df.sort_values("date")
 
-        st.subheader("📈 Trigger Correlation Chart")
-        
-        chart_data = df_logs.set_index("date")[["puffs", "aqi_level", "pollen_level"]]
-        chart_data.columns = ["Rescue Puffs Taken", "Air Pollution (AQI)", "Pollen Level"]
+        hi = df[df["aqi_level"] > 70]["puffs"]
+        lo = df[df["aqi_level"] <= 70]["puffs"]
+        if len(hi) and len(lo):
+            st.info(
+                f"On entries with AQI above 70, rescue puffs averaged **{hi.mean():.1f}** "
+                f"vs **{lo.mean():.1f}** on other days. This is a pattern in your own log, "
+                "not proof that air quality caused symptoms."
+            )
 
-        st.line_chart(chart_data)
+        st.subheader("🫁 Rescue puffs per entry")
+        st.bar_chart(df.set_index("date")["puffs"], color="#537F98")
+        st.subheader("🌫️ Air quality (AQI) on those days")
+        st.line_chart(df.set_index("date")["aqi_level"], color="#B45309")
+        st.caption("AQI above 100 is unhealthy for sensitive groups, including people with asthma.")
 
         st.divider()
-
         st.subheader("📊 History Table")
-        st.dataframe(df_logs, use_container_width=True)
+        st.dataframe(df[["date", "puffs", "aqi_level", "notes"]], use_container_width=True)
     else:
-        st.info("No entries logged yet. Log daily puffs to generate your comparison chart.")
+        st.info("No entries logged yet. Log daily puffs to generate your comparison chart, or try the demo from the landing page.")
 
 # PAGE 4: MEDICATION & CALENDAR REMINDERS
 elif page == "Medication & Reminders":
@@ -636,9 +776,9 @@ elif page == "Medication & Reminders":
 
     st.subheader("➕ Create New Reminder")
     with st.form("add_reminder_form"):
-        new_task = st.text_input("Reminder Description", placeholder="e.g., Take Budesonide before school")
+        new_task = st.text_input("Reminder Description", placeholder="e.g., Morning inhaler per asthma action plan")
         new_time = st.time_input("Scheduled Time", value=datetime.strptime("07:30", "%H:%M").time())
-        
+
         if st.form_submit_button("Save & Enable Calendar Sync"):
             if new_task:
                 user.setdefault("reminders", []).append({
@@ -649,20 +789,24 @@ elif page == "Medication & Reminders":
                 st.success("Custom reminder saved!")
                 st.rerun()
 
+# PAGE 5: AERO ASSISTANT
 elif page == "Aero Assistant":
     st.title("Aero Assistant")
     st.write("Environmental information and visit preparation for your family.")
     st.caption(
         "AI responses are informational, not medical advice. When submitted, your question and relevant "
-        "readings or summarized log data are sent to OpenAI. Doctor-report calculations are performed locally."
+        "readings or summarized log data are sent to Groq. Doctor-report calculations are performed locally."
     )
 
-    pm25, ozone, pollen_val, pollen_str, smoke, source_text = fetch_live_environmental_data(user["zip_code"])
-    current_environment = (
-        f"Current feed: PM2.5 AQI {pm25}; ozone AQI {ozone}; pollen index {pollen_val}/100 ({pollen_str}); "
-        f"wildfire smoke {'detected' if smoke else 'not detected'}; source: {source_text}. "
-        "These are current readings, not an hourly forecast."
-    )
+    env, env_error = fetch_live_environmental_data(user["zip_code"])
+    if env:
+        current_environment = (
+            f"Current feed: PM2.5 AQI {env['pm25']}; ozone AQI {env['ozone']}; "
+            f"source: {env['source']}, observed {env['observed']}. "
+            "These are current readings, not an hourly forecast."
+        )
+    else:
+        current_environment = "Live air-quality readings are unavailable right now."
     recent_report = generate_doctor_report(user.get("logs", []))
 
     outdoor_tab, visit_tab, terms_tab, report_tab = st.tabs(
@@ -678,13 +822,14 @@ elif page == "Aero Assistant":
                 key="outdoor_advisor_question",
             )
             outdoor_submit = st.form_submit_button("Get Environmental Guidance")
-        if outdoor_submit:
-            if outdoor_question.strip():
-                answer, error = ask_aero_ai(outdoor_question, current_environment)
-                st.session_state["aero_outdoor_answer"] = answer
-                st.session_state["aero_outdoor_error"] = error
-            else:
-                st.warning("Enter an activity or question first.")
+            if outdoor_submit:
+                if outdoor_question.strip():
+                    with st.spinner("Thinking…"):
+                        answer, error = ask_aero_ai(outdoor_question, current_environment)
+                    st.session_state["aero_outdoor_answer"] = answer
+                    st.session_state["aero_outdoor_error"] = error
+                else:
+                    st.warning("Enter an activity or question first.")
         if st.session_state.get("aero_outdoor_answer"):
             st.markdown(st.session_state["aero_outdoor_answer"])
         elif st.session_state.get("aero_outdoor_error"):
@@ -699,16 +844,17 @@ elif page == "Aero Assistant":
                 key="visit_prep_question",
             )
             visit_submit = st.form_submit_button("Prepare Questions")
-        if visit_submit:
-            if visit_question.strip():
-                answer, error = ask_aero_ai(
-                    visit_question,
-                    f"Recent log summary for context:\n{recent_report}",
-                )
-                st.session_state["aero_visit_answer"] = answer
-                st.session_state["aero_visit_error"] = error
-            else:
-                st.warning("Enter a question or concern first.")
+            if visit_submit:
+                if visit_question.strip():
+                    with st.spinner("Thinking…"):
+                        answer, error = ask_aero_ai(
+                            visit_question,
+                            f"Recent log summary for context:\n{recent_report}",
+                        )
+                    st.session_state["aero_visit_answer"] = answer
+                    st.session_state["aero_visit_error"] = error
+                else:
+                    st.warning("Enter a question or concern first.")
         if st.session_state.get("aero_visit_answer"):
             st.markdown(st.session_state["aero_visit_answer"])
         elif st.session_state.get("aero_visit_error"):
@@ -722,13 +868,14 @@ elif page == "Aero Assistant":
                 key="term_explainer_question",
             )
             term_submit = st.form_submit_button("Explain")
-        if term_submit:
-            if term_question.strip():
-                answer, error = ask_aero_ai(term_question, "No personal log data is needed for this explanation.")
-                st.session_state["aero_term_answer"] = answer
-                st.session_state["aero_term_error"] = error
-            else:
-                st.warning("Enter a term or question first.")
+            if term_submit:
+                if term_question.strip():
+                    with st.spinner("Thinking…"):
+                        answer, error = ask_aero_ai(term_question, "No personal log data is needed for this explanation.")
+                    st.session_state["aero_term_answer"] = answer
+                    st.session_state["aero_term_error"] = error
+                else:
+                    st.warning("Enter a term or question first.")
         if st.session_state.get("aero_term_answer"):
             st.markdown(st.session_state["aero_term_answer"])
         elif st.session_state.get("aero_term_error"):
@@ -739,10 +886,11 @@ elif page == "Aero Assistant":
         if st.button("Generate Doctor Report", key="generate_doctor_report"):
             report = generate_doctor_report(user.get("logs", []))
             st.session_state["aero_doctor_report"] = report
-            answer, error = ask_aero_ai(
-                "Prepare a concise pediatrician-ready version of this report. Preserve every number and caveat exactly. Do not add diagnoses or claim that an environmental reading caused inhaler use.",
-                report,
-            )
+            with st.spinner("Preparing report…"):
+                answer, error = ask_aero_ai(
+                    "Prepare a concise pediatrician-ready version of this report. Preserve every number and caveat exactly. Do not add diagnoses or claim that an environmental reading caused inhaler use.",
+                    report,
+                )
             st.session_state["aero_doctor_report_ai"] = answer
             st.session_state["aero_doctor_report_error"] = error
 
