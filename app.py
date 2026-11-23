@@ -279,14 +279,15 @@ def _geocode_location(location_query):
     return float(top["latitude"]), float(top["longitude"]), (top.get("country_code") == "US")
 
 def _fetch_google_pollen(lat, lon):
-    """Fetches real-time Tree, Grass, and Weed pollen index (0-5) from Google Pollen API (US + 65+ countries)."""
-    if not GOOGLE_POLLEN_API_KEY:
-        return None
+    """Fetches real-time Tree, Grass, and Weed pollen index (0-5) from Google Pollen API."""
+    api_key = get_secret("GOOGLE_POLLEN_API_KEY")
+    if not api_key:
+        return None, "Missing GOOGLE_POLLEN_API_KEY in secrets"
     try:
         r = requests.get(
             "https://pollen.googleapis.com/v1/forecast:lookup",
             params={
-                "key": GOOGLE_POLLEN_API_KEY,
+                "key": api_key.strip(),
                 "location.latitude": lat,
                 "location.longitude": lon,
                 "days": 1,
@@ -294,35 +295,38 @@ def _fetch_google_pollen(lat, lon):
             },
             timeout=6,
         )
-        r.raise_for_status()
+        if not r.ok:
+            err_msg = r.json().get("error", {}).get("message", f"HTTP {r.status_code}")
+            return None, err_msg
         daily = r.json().get("dailyInfo", [])
         if not daily:
-            return None
+            return None, "No pollen data for this location"
         types = daily[0].get("pollenTypeInfo", [])
-        best_val, best_cat, best_name = 0, "None", "None"
+        best_val, best_cat, best_name = 0, "Low", "None"
         for t in types:
             idx_info = t.get("indexInfo")
             if idx_info and idx_info.get("value", 0) >= best_val:
                 best_val = int(idx_info["value"])
                 best_cat = idx_info.get("category", "Low")
                 best_name = t.get("displayName", t.get("code", "Pollen"))
-        return {"index": best_val, "category": best_cat, "dominant": best_name}
-    except Exception:
-        return None
+        return {"index": best_val, "category": best_cat, "dominant": best_name}, None
+    except Exception as e:
+        return None, str(e)
 
 @st.cache_data(ttl=1800, show_spinner="Fetching global air quality & pollen…")
 def _fetch_env(location_query):
     q = str(location_query).strip()
     lat, lon, is_us = _geocode_location(q)
     pm25, ozone, aqi_source, observed = None, None, None, None
+    airnow_key = get_secret("AIRNOW_API_KEY")
 
     # 1. EPA AirNow for US ZIP codes
-    if is_us and AIRNOW_API_KEY and q.isdigit() and len(q) == 5:
+    if is_us and airnow_key and q.isdigit() and len(q) == 5:
         try:
             r = requests.get(
                 "https://www.airnowapi.org/aq/observation/zipCode/current/",
                 params={"format": "application/json", "zipCode": q,
-                        "distance": 25, "API_KEY": AIRNOW_API_KEY},
+                        "distance": 25, "API_KEY": airnow_key.strip()},
                 timeout=6,
             )
             r.raise_for_status()
@@ -352,7 +356,7 @@ def _fetch_env(location_query):
         observed = cur["time"].replace("T", " ") + " (local)"
 
     # 3. Google Global Pollen API (US + 65+ countries)
-    pollen = _fetch_google_pollen(lat, lon)
+    pollen, pollen_err = _fetch_google_pollen(lat, lon)
     source_str = f"{aqi_source} & Google Pollen" if pollen else aqi_source
 
     return {
@@ -361,6 +365,7 @@ def _fetch_env(location_query):
         "pollen_index": pollen["index"] if pollen else None,
         "pollen_category": pollen["category"] if pollen else None,
         "dominant_pollen": pollen["dominant"] if pollen else None,
+        "pollen_error": pollen_err,
         "source": source_str,
         "observed": observed,
     }
@@ -770,9 +775,12 @@ if page == "Today's Air Quality":
                       delta_color="off")
         else:
             m3.metric("Pollen Index (0–5)", "n/a",
-                      delta="Add GOOGLE_POLLEN_API_KEY in secrets",
+                      delta=env.get("pollen_error") or "Unavailable",
                       delta_color="off")
 
+        if st.button("🔄 Refresh Air & Pollen Readings"):
+            st.cache_data.clear()
+            st.rerun()
 # PAGE 2: LOG PUFFS
 elif page == "Log Inhaler Puffs":
     st.title("Log Daily Inhaler Usage")
