@@ -1,2 +1,5 @@
 .streamlit/secrets.toml
 users.json
+
+keys.txt
+.streamlit/secrets.toml

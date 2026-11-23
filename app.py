@@ -8,11 +8,7 @@ import requests
 from datetime import date, datetime, timedelta
 import urllib.parse
 
-# =========================================================
-# KEYS ARE READ FROM .streamlit/secrets.toml (or environment)
-# GROQ_API_KEY = "gsk_..."
-# AIRNOW_API_KEY = "your-airnow-key"
-# =========================================================
+
 def get_secret(name):
     try:
         value = st.secrets.get(name)
@@ -21,6 +17,7 @@ def get_secret(name):
     return value or os.getenv(name)
 
 AIRNOW_API_KEY = get_secret("AIRNOW_API_KEY")
+GOOGLE_POLLEN_API_KEY = get_secret("GOOGLE_POLLEN_API_KEY")
 
 # Page Configuration
 st.set_page_config(
@@ -195,7 +192,6 @@ def load_users():
         return {}
 
 def save_users(users):
-    # Demo data is never written to disk
     if st.session_state.get("demo"):
         return
     try:
@@ -210,29 +206,29 @@ def hash_password(pw, salt=None):
     return f"{salt}${h}"
 
 def check_password(pw, stored):
-    if "$" not in stored:  # legacy plaintext accounts still work
+    if "$" not in stored:
         return hmac.compare_digest(pw, stored)
     salt, h = stored.split("$", 1)
     return hmac.compare_digest(hash_password(pw, salt).split("$", 1)[1], h)
 
 def build_demo_user():
-    """14 days of believable data with a visible ozone spike. Dates are relative to today."""
-    rows = [  # (puffs, AQI, note) oldest -> newest
-        (0, 34, ""), (1, 41, ""), (0, 38, ""), (0, 36, ""), (1, 47, ""),
-        (0, 44, ""), (2, 78, "Cough after recess"),
-        (5, 112, "High ozone day. Wheezing at soccer practice, stayed inside after"),
-        (4, 98, "Night cough, woke once"), (2, 66, "Better, still a little tight"),
-        (1, 52, ""), (0, 40, ""), (1, 45, ""), (1, 43, ""),
+    """14 days of believable data with a visible ozone & pollen spike. Dates are relative to today."""
+    rows = [  # (puffs, AQI, pollen_index_0_to_5, note) oldest -> newest
+        (0, 34, 1, ""), (1, 41, 2, ""), (0, 38, 1, ""), (0, 36, 1, ""), (1, 47, 2, ""),
+        (0, 44, 2, ""), (2, 78, 3, "Cough after recess"),
+        (5, 112, 5, "High ozone & grass pollen day. Wheezing at soccer practice, stayed inside after"),
+        (4, 98, 4, "Night cough, woke once"), (2, 66, 3, "Better, still a little tight"),
+        (1, 52, 2, ""), (0, 40, 1, ""), (1, 45, 2, ""), (1, 43, 1, ""),
     ]
     today = date.today()
     logs = [
         {"date": (today - timedelta(days=len(rows) - 1 - i)).strftime("%Y-%m-%d"),
-         "puffs": p, "aqi_level": a, "notes": n}
-        for i, (p, a, n) in enumerate(rows)
+         "puffs": p, "aqi_level": a, "pollen_index": pol, "notes": n}
+        for i, (p, a, pol, n) in enumerate(rows)
     ]
     return {
         "password": "", "zip_code": "78641",
-        "parent_phone": "5550142", "doctor_phone": "5550175",  # 555-01xx = fictional range
+        "parent_phone": "5550142", "doctor_phone": "5550175",
         "logs": logs,
         "reminders": [
             {"task": "Morning controller inhaler (per asthma action plan)", "time": "07:30"},
@@ -254,16 +250,78 @@ def render_medical_disclaimer():
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# LIVE AIR QUALITY (AirNow first, Open-Meteo fallback, cached 30 min)
-# Exceptions are NOT cached, so a failed fetch retries on the next click.
+# GLOBAL AIR QUALITY & POLLEN ENGINE (US + Worldwide)
 # ---------------------------------------------------------
-@st.cache_data(ttl=1800, show_spinner="Fetching air quality…")
-def _fetch_env(zip_code):
-    if AIRNOW_API_KEY:
+def _geocode_location(location_query):
+    """Resolves any US ZIP code or international postal code/city into (lat, lon, is_us)."""
+    q = str(location_query).strip()
+    # Fast path for 5-digit US ZIP codes
+    if q.isdigit() and len(q) == 5:
+        try:
+            geo = requests.get(f"https://api.zippopotam.us/us/{q}", timeout=5)
+            geo.raise_for_status()
+            place = geo.json()["places"][0]
+            return float(place["latitude"]), float(place["longitude"]), True
+        except Exception:
+            pass
+
+    # Global geocoding for international postal codes & cities (and US backup)
+    geo_global = requests.get(
+        "https://geocoding-api.open-meteo.com/v1/search",
+        params={"name": q, "count": 1, "format": "json"},
+        timeout=6,
+    )
+    geo_global.raise_for_status()
+    results = geo_global.json().get("results")
+    if not results:
+        raise ValueError("Location not found")
+    top = results[0]
+    return float(top["latitude"]), float(top["longitude"]), (top.get("country_code") == "US")
+
+def _fetch_google_pollen(lat, lon):
+    """Fetches real-time Tree, Grass, and Weed pollen index (0-5) from Google Pollen API (US + 65+ countries)."""
+    if not GOOGLE_POLLEN_API_KEY:
+        return None
+    try:
+        r = requests.get(
+            "https://pollen.googleapis.com/v1/forecast:lookup",
+            params={
+                "key": GOOGLE_POLLEN_API_KEY,
+                "location.latitude": lat,
+                "location.longitude": lon,
+                "days": 1,
+                "plantsDescription": "false",
+            },
+            timeout=6,
+        )
+        r.raise_for_status()
+        daily = r.json().get("dailyInfo", [])
+        if not daily:
+            return None
+        types = daily[0].get("pollenTypeInfo", [])
+        best_val, best_cat, best_name = 0, "None", "None"
+        for t in types:
+            idx_info = t.get("indexInfo")
+            if idx_info and idx_info.get("value", 0) >= best_val:
+                best_val = int(idx_info["value"])
+                best_cat = idx_info.get("category", "Low")
+                best_name = t.get("displayName", t.get("code", "Pollen"))
+        return {"index": best_val, "category": best_cat, "dominant": best_name}
+    except Exception:
+        return None
+
+@st.cache_data(ttl=1800, show_spinner="Fetching global air quality & pollen…")
+def _fetch_env(location_query):
+    q = str(location_query).strip()
+    lat, lon, is_us = _geocode_location(q)
+    pm25, ozone, aqi_source, observed = None, None, None, None
+
+    # 1. EPA AirNow for US ZIP codes
+    if is_us and AIRNOW_API_KEY and q.isdigit() and len(q) == 5:
         try:
             r = requests.get(
                 "https://www.airnowapi.org/aq/observation/zipCode/current/",
-                params={"format": "application/json", "zipCode": zip_code,
+                params={"format": "application/json", "zipCode": q,
                         "distance": 25, "API_KEY": AIRNOW_API_KEY},
                 timeout=6,
             )
@@ -273,28 +331,38 @@ def _fetch_env(zip_code):
             ozone = next((x["AQI"] for x in rows if x["ParameterName"] == "O3"), None)
             if rows and (pm25 is not None or ozone is not None):
                 o = rows[0]
-                return {
-                    "pm25": pm25, "ozone": ozone, "source": "EPA AirNow",
-                    "observed": f"{o['DateObserved'].strip()} {int(o['HourObserved']):02d}:00 {o['LocalTimeZone']}",
-                }
-        except (requests.RequestException, ValueError, KeyError, TypeError):
-            pass  # fall through to Open-Meteo
+                aqi_source = "EPA AirNow"
+                observed = f"{o['DateObserved'].strip()} {int(o['HourObserved']):02d}:00 {o['LocalTimeZone']}"
+        except Exception:
+            pass
 
-    geo = requests.get(f"https://api.zippopotam.us/us/{zip_code}", timeout=6)
-    geo.raise_for_status()
-    place = geo.json()["places"][0]
-    aq = requests.get(
-        "https://air-quality-api.open-meteo.com/v1/air-quality",
-        params={"latitude": place["latitude"], "longitude": place["longitude"],
-                "current": "us_aqi_pm2_5,us_aqi_ozone", "timezone": "auto"},
-        timeout=6,
-    )
-    aq.raise_for_status()
-    cur = aq.json()["current"]
+    # 2. Global Air Quality fallback (works worldwide)
+    if pm25 is None and ozone is None:
+        aq = requests.get(
+            "https://air-quality-api.open-meteo.com/v1/air-quality",
+            params={"latitude": lat, "longitude": lon,
+                    "current": "us_aqi_pm2_5,us_aqi_ozone", "timezone": "auto"},
+            timeout=6,
+        )
+        aq.raise_for_status()
+        cur = aq.json()["current"]
+        pm25 = cur.get("us_aqi_pm2_5")
+        ozone = cur.get("us_aqi_ozone")
+        aqi_source = "Open-Meteo Global Air Quality"
+        observed = cur["time"].replace("T", " ") + " (local)"
+
+    # 3. Google Global Pollen API (US + 65+ countries)
+    pollen = _fetch_google_pollen(lat, lon)
+    source_str = f"{aqi_source} & Google Pollen" if pollen else aqi_source
+
     return {
-        "pm25": cur.get("us_aqi_pm2_5"), "ozone": cur.get("us_aqi_ozone"),
-        "source": "Open-Meteo Air Quality",
-        "observed": cur["time"].replace("T", " ") + " (local)",
+        "pm25": pm25,
+        "ozone": ozone,
+        "pollen_index": pollen["index"] if pollen else None,
+        "pollen_category": pollen["category"] if pollen else None,
+        "dominant_pollen": pollen["dominant"] if pollen else None,
+        "source": source_str,
+        "observed": observed,
     }
 
 def fetch_live_environmental_data(zip_code):
@@ -305,17 +373,18 @@ def fetch_live_environmental_data(zip_code):
             raise ValueError("no readings")
         return env, None
     except Exception:
-        return None, "Air-quality data is temporarily unavailable. Please try again in a few minutes."
+        return None, "Air-quality data is temporarily unavailable. Check your ZIP/postal code or try again in a few minutes."
 
 def max_aqi_of(env):
     return max(v for v in (env["pm25"], env["ozone"]) if v is not None)
 
 def risk_level(env):
-    """Word + color + one action. Deliberately says nothing about medication timing."""
+    """Word + color + one action. Evaluates both AQI and Google Pollen Index (0-5)."""
     m = max_aqi_of(env)
-    if m >= 100:
+    p = env.get("pollen_index") or 0
+    if m >= 100 or p >= 4:
         return "RED", "banner-red", "Limit outdoor time and follow your child's asthma action plan."
-    if m >= 50:
+    if m >= 50 or p >= 3:
         return "YELLOW", "banner-yellow", "Outdoor play is okay. Keep the rescue inhaler in the backpack and watch for symptoms."
     return "GREEN", "banner-green", "Good day to be outside. Keep the rescue inhaler with you as usual."
 
@@ -336,7 +405,7 @@ def ask_aero_ai(question, context):
         "or recommend starting, stopping, changing, or timing any medication. For medication questions, "
         "direct the caregiver to the child's written asthma action plan and clinician. For severe or "
         "rapidly worsening breathing symptoms, tell them to follow their emergency plan and seek urgent "
-        "medical help. Explain air-quality information in plain language, use only facts in the supplied "
+        "medical help. Explain air-quality and pollen information in plain language, use only facts in the supplied "
         "context, never invent hourly forecasts or pollutant-specific log data, and distinguish correlation "
         "from causation. Keep the answer concise and practical."
     )
@@ -380,7 +449,11 @@ def generate_doctor_report(logs, today=None):
                 aqi = float(entry["aqi_level"])
             except (KeyError, TypeError, ValueError):
                 aqi = None
-            recent_entries.append((entry_date, puffs, aqi))
+            try:
+                pollen = float(entry["pollen_index"])
+            except (KeyError, TypeError, ValueError):
+                pollen = None
+            recent_entries.append((entry_date, puffs, aqi, pollen))
 
     if not recent_entries:
         return (
@@ -388,10 +461,10 @@ def generate_doctor_report(logs, today=None):
             "No valid inhaler log entries were found in the last 30 days."
         )
 
-    total_puffs = sum(puffs for _, puffs, _ in recent_entries)
-    logged_days = len({entry_date for entry_date, _, _ in recent_entries})
+    total_puffs = sum(puffs for _, puffs, _, _ in recent_entries)
+    logged_days = len({entry_date for entry_date, _, _, _ in recent_entries})
     total_by_weekday = {}
-    for entry_date, puffs, _ in recent_entries:
+    for entry_date, puffs, _, _ in recent_entries:
         weekday = entry_date.strftime("%A")
         total_by_weekday[weekday] = total_by_weekday.get(weekday, 0) + puffs
 
@@ -401,20 +474,33 @@ def generate_doctor_report(logs, today=None):
     ]
 
     high_aqi_puffs = sum(
-        puffs for _, puffs, aqi in recent_entries if aqi is not None and aqi > 70
+        puffs for _, puffs, aqi, _ in recent_entries if aqi is not None and aqi > 70
     )
     comparable_puffs = sum(
-        puffs for _, puffs, aqi in recent_entries if aqi is not None
+        puffs for _, puffs, aqi, _ in recent_entries if aqi is not None
     )
     if comparable_puffs:
         high_aqi_percent = round(high_aqi_puffs / comparable_puffs * 100)
         lines.append(
-            f"Environmental overlap: {high_aqi_puffs} of {comparable_puffs} puffs "
+            f"Air quality overlap: {high_aqi_puffs} of {comparable_puffs} puffs "
             f"({high_aqi_percent}%) were logged on entries with stored AQI above 70. "
             "Aero stores the higher of PM2.5 and ozone, so the log cannot identify which pollutant was higher."
         )
     else:
-        lines.append("Environmental overlap: no comparable AQI values were recorded with these entries.")
+        lines.append("Air quality overlap: no comparable AQI values were recorded with these entries.")
+
+    high_pollen_puffs = sum(
+        puffs for _, puffs, _, pollen in recent_entries if pollen is not None and pollen >= 3
+    )
+    comparable_pollen_puffs = sum(
+        puffs for _, puffs, _, pollen in recent_entries if pollen is not None
+    )
+    if comparable_pollen_puffs:
+        high_pollen_percent = round(high_pollen_puffs / comparable_pollen_puffs * 100)
+        lines.append(
+            f"Pollen overlap: {high_pollen_puffs} of {comparable_pollen_puffs} puffs "
+            f"({high_pollen_percent}%) were logged on entries with stored Pollen Index 3/5 or higher."
+        )
 
     if total_puffs:
         highest_count = max(total_by_weekday.values())
@@ -428,7 +514,7 @@ def generate_doctor_report(logs, today=None):
     else:
         lines.append("No rescue inhaler puffs were recorded in this period.")
 
-    lines.append("These are user-entered observations, not a diagnosis or proof that air quality caused symptoms.")
+    lines.append("These are user-entered observations, not a diagnosis or proof that air quality or pollen caused symptoms.")
     return "\n".join(lines)
 
 # ---------------------------------------------------------
@@ -479,10 +565,10 @@ if not st.session_state.current_user:
     <div style="text-align: center; padding: 2rem 1rem; background: #DCEAE8; border-radius: 16px; border: 1px solid #B4CBC7; margin-bottom: 1rem;">
         <h1 style="font-size: 3rem; color: #203B43; margin: 0;">🫁 AeroBreathe</h1>
         <p style="font-size: 1.3rem; color: #38565D; margin-top: 0.5rem; font-weight: 500;">
-            Smart, simple asthma safety and trigger tracking built for families.
+            Smart, simple asthma safety and trigger tracking built for families worldwide.
         </p>
         <p style="font-size: 1rem; color: #617B80; max-width: 700px; margin: 0.5rem auto 0 auto;">
-            Aero translates local air-quality readings into a daily action and lets parents compare rescue inhaler use against air quality. It stores only what it needs to run: your email, ZIP code, optional phone numbers, and the entries you log. Nothing is sold or shared.
+            Aero translates local air-quality and pollen readings into a daily action and lets parents compare rescue inhaler use against environmental triggers. It stores only what it needs to run: your email, postal/ZIP code or city, optional phone numbers, and the entries you log. Nothing is sold or shared.
         </p>
     </div>
     """, unsafe_allow_html=True)
@@ -501,8 +587,8 @@ if not st.session_state.current_user:
     with col_f1:
         st.markdown("""
         <div class="feature-card">
-            <h3 style="margin-top:0; color:#537F98;">📊 Live Air Quality</h3>
-            <p style="font-size:0.95rem; color:#38565D;">Pulls current EPA AirNow PM2.5 and ozone readings for your ZIP code.</p>
+            <h3 style="margin-top:0; color:#537F98;">📊 Global Air & Pollen</h3>
+            <p style="font-size:0.95rem; color:#38565D;">Pulls live PM2.5, ozone, and Tree/Grass/Weed pollen indexes for your location worldwide.</p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -510,7 +596,7 @@ if not st.session_state.current_user:
         st.markdown("""
         <div class="feature-card">
             <h3 style="margin-top:0; color:#5E8C79;">📈 Puff Analytics</h3>
-            <p style="font-size:0.95rem; color:#38565D;">Compares daily rescue inhaler usage against air quality so patterns are easy to spot.</p>
+            <p style="font-size:0.95rem; color:#38565D;">Compares daily rescue inhaler usage against air quality and pollen so patterns are easy to spot.</p>
         </div>
         """, unsafe_allow_html=True)
 
@@ -551,7 +637,7 @@ if not st.session_state.current_user:
 
     with tab_signup:
         st.subheader("Create an Account")
-        st.write("Sign up in seconds to start tracking air-quality triggers.")
+        st.write("Sign up in seconds to start tracking air-quality and pollen triggers.")
 
         with st.form("signup_form"):
             col_a1, col_a2 = st.columns(2)
@@ -562,7 +648,7 @@ if not st.session_state.current_user:
 
             st.divider()
             st.markdown("### 📍 Location & Optional Emergency Contacts")
-            zip_code = st.text_input("Home Zip Code*", placeholder="e.g., 78641")
+            zip_code = st.text_input("ZIP / Postal Code or City*", placeholder="e.g., 78641, SW1A 1AA, or Tokyo")
 
             col_p1, col_p2 = st.columns(2)
             with col_p1:
@@ -607,14 +693,14 @@ if st.session_state.get("demo"):
     st.sidebar.info("🎬 Demo profile (ZIP 78641). Changes aren't saved.")
 else:
     user = st.session_state.users.get(st.session_state.current_user)
-    if user is None:  # users.json was reset (free hosting) or account removed
+    if user is None:
         st.session_state.current_user = None
         st.rerun()
 
 st.sidebar.markdown(f"""
 <div style="background: #DCEAE8; padding: 1rem; border-radius: 10px; border: 1px solid #B4CBC7; margin-bottom: 1rem;">
     <h4 style="margin:0; color:#203B43;">Account Overview</h4>
-    <p style="margin:0; color:#617B80; font-size:0.9rem;">Zip Code: <strong>{user['zip_code']}</strong></p>
+    <p style="margin:0; color:#617B80; font-size:0.9rem;">Location: <strong>{user['zip_code']}</strong></p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -647,7 +733,7 @@ st.write("")
 # PAGE 1: DASHBOARD
 if page == "Today's Air Quality":
     st.title("Today's Air Quality & Breathing Risk")
-    st.write("Check your local air quality before planning outdoor time.")
+    st.write("Check your local air quality and pollen index before planning outdoor time.")
 
     env, env_error = fetch_live_environmental_data(user["zip_code"])
     if env_error:
@@ -668,8 +754,8 @@ if page == "Today's Air Quality":
         """, unsafe_allow_html=True)
 
         st.divider()
-        st.subheader("📊 Local Air Quality")
-        m1, m2 = st.columns(2)
+        st.subheader("📊 Local Air Quality & Pollen")
+        m1, m2, m3 = st.columns(3)
         fmt = lambda v: "n/a" if v is None else f"{v} AQI"
         m1.metric("PM2.5 (dust & smoke particles)", fmt(env["pm25"]),
                   delta=None if env["pm25"] is None else ("Moderate or higher" if env["pm25"] > 50 else "Good"),
@@ -678,6 +764,15 @@ if page == "Today's Air Quality":
                   delta=None if env["ozone"] is None else ("Elevated" if env["ozone"] > 50 else "Good"),
                   delta_color="off")
 
+        if env["pollen_index"] is not None:
+            m3.metric("Pollen Index (0–5)", f"{env['pollen_index']} / 5 ({env['pollen_category']})",
+                      delta=f"Top: {env['dominant_pollen']}",
+                      delta_color="off")
+        else:
+            m3.metric("Pollen Index (0–5)", "n/a",
+                      delta="Add GOOGLE_POLLEN_API_KEY in secrets",
+                      delta_color="off")
+
 # PAGE 2: LOG PUFFS
 elif page == "Log Inhaler Puffs":
     st.title("Log Daily Inhaler Usage")
@@ -685,9 +780,13 @@ elif page == "Log Inhaler Puffs":
 
     env, env_error = fetch_live_environmental_data(user["zip_code"])
     current_aqi = max_aqi_of(env) if env else None
+    current_pollen = env.get("pollen_index") if env else None
     if env:
-        st.info(f"📍 Current AQI for ZIP {user['zip_code']}: **{current_aqi}** ({env['source']}). "
-                "AQI is saved only for entries dated today.")
+        pol_text = f" · **Pollen Index {current_pollen}/5 ({env['pollen_category']})**" if current_pollen is not None else ""
+        st.info(
+            f"📍 Current readings for {user['zip_code']}: **AQI {current_aqi}**{pol_text} ({env['source']}). "
+            "Readings are saved automatically for entries dated today."
+        )
     else:
         st.warning(env_error + " You can still save an entry without an AQI value.")
 
@@ -701,6 +800,7 @@ elif page == "Log Inhaler Puffs":
                 "date": log_date.strftime("%Y-%m-%d"),
                 "puffs": int(puffs_taken),
                 "aqi_level": current_aqi if log_date == date.today() else None,
+                "pollen_index": current_pollen if log_date == date.today() else None,
                 "notes": notes.strip(),
             })
             save_users(st.session_state.users)
@@ -708,17 +808,20 @@ elif page == "Log Inhaler Puffs":
 
 # PAGE 3: ANALYTICS
 elif page == "Puffs vs. Weather Chart":
-    st.title("Inhaler Usage vs. Air Quality")
-    st.write("Compare rescue inhaler puffs against local air quality to help spot environmental triggers.")
+    st.title("Inhaler Usage vs. Air Quality & Pollen")
+    st.write("Compare rescue inhaler puffs against local air quality and pollen to help spot environmental triggers.")
 
     logs = user.get("logs", [])
     if logs:
         df = pd.DataFrame(logs)
         if "aqi_level" not in df:
             df["aqi_level"] = None
+        if "pollen_index" not in df:
+            df["pollen_index"] = None
         if "notes" not in df:
             df["notes"] = ""
         df["aqi_level"] = pd.to_numeric(df["aqi_level"], errors="coerce")
+        df["pollen_index"] = pd.to_numeric(df["pollen_index"], errors="coerce")
         df = df.sort_values("date")
 
         hi = df[df["aqi_level"] > 70]["puffs"]
@@ -735,10 +838,12 @@ elif page == "Puffs vs. Weather Chart":
         st.subheader("🌫️ Air quality (AQI) on those days")
         st.line_chart(df.set_index("date")["aqi_level"], color="#B45309")
         st.caption("AQI above 100 is unhealthy for sensitive groups, including people with asthma.")
+        st.subheader("🌿 Pollen Index (0–5) on those days")
+        st.line_chart(df.set_index("date")["pollen_index"], color="#5E8C79")
 
         st.divider()
         st.subheader("📊 History Table")
-        st.dataframe(df[["date", "puffs", "aqi_level", "notes"]], use_container_width=True)
+        st.dataframe(df[["date", "puffs", "aqi_level", "pollen_index", "notes"]], use_container_width=True)
     else:
         st.info("No entries logged yet. Log daily puffs to generate your comparison chart, or try the demo from the landing page.")
 
@@ -800,9 +905,13 @@ elif page == "Aero Assistant":
 
     env, env_error = fetch_live_environmental_data(user["zip_code"])
     if env:
+        pollen_ctx = (
+            f"Pollen Index {env['pollen_index']}/5 ({env['pollen_category']}, top allergen: {env['dominant_pollen']}); "
+            if env["pollen_index"] is not None else ""
+        )
         current_environment = (
             f"Current feed: PM2.5 AQI {env['pm25']}; ozone AQI {env['ozone']}; "
-            f"source: {env['source']}, observed {env['observed']}. "
+            f"{pollen_ctx}source: {env['source']}, observed {env['observed']}. "
             "These are current readings, not an hourly forecast."
         )
     else:
